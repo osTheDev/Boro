@@ -342,6 +342,11 @@ void gfx_tex_part(const Texture *t, float sx, float sy, float sw, float sh,
     sceGuDrawArray(GU_SPRITES, TVERT_FMT, 2, 0, v);
 }
 
+void gfx_filter(int linear)
+{
+    sceGuTexFilter(linear ? GU_LINEAR : GU_NEAREST, linear ? GU_LINEAR : GU_NEAREST);
+}
+
 void gfx_tex(const Texture *t, float x, float y, float w, float h, u32 color)
 {
     gfx_tex_part(t, 0, 0, t->w, t->h, x, y, w, h, color);

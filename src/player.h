@@ -32,6 +32,8 @@ void player_jump(int index);
 // position of out[0].
 int player_queue(int *out, int max, int *first_index);
 
+// Copies up to n of the latest output samples (mono, -1..1). Returns how many.
+int player_scope(float *out, int n);
 int player_index(int *total); // position in play order, and the list length
 int player_song(void); // the audible song, or -1 when nothing is loaded
 int player_paused(void);
