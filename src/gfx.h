@@ -56,6 +56,7 @@ void gfx_tex_part(const Texture *t, float sx, float sy, float sw, float sh,
 void gfx_nine(const Texture *t, int border, float x, float y, float w, float h, u32 color);
 // Four corner colors: top-left, top-right, bottom-left, bottom-right.
 void gfx_gradient(float x, float y, float w, float h, u32 tl, u32 tr, u32 bl, u32 br);
+void gfx_filter(int linear); // nearest when 0, for pixel art
 void gfx_clip(int x, int y, int w, int h);
 void gfx_unclip(void);
 

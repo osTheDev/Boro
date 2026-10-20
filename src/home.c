@@ -9,6 +9,7 @@
 #include "library.h"
 #include "player.h"
 #include "settings.h"
+#include "stats.h"
 #include "ui.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
@@ -124,7 +125,8 @@ int home_update(const Input *in, float dt)
 
     if (p & PSP_CTRL_CROSS) {
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
-        show_toast(sel == SEL_VIDEO ? "Video arrives in milestone 5" : "Stats arrive in milestone 4");
+        if (sel == SEL_STATS) return library_state() == LIB_READY ? HOME_OPEN_STATS : HOME_STAY;
+        show_toast("Video arrives in milestone 5");
     }
     if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
@@ -229,24 +231,39 @@ static void draw_tiles(void)
 
 static void draw_stats(void)
 {
+    // The week so far, refreshed every few seconds.
+    static Stats week;
+    static float refresh_t = -1;
+    if (library_state() == LIB_READY && (refresh_t < 0 || t_now - refresh_t > 5)) {
+        refresh_t = t_now;
+        stats_compute(PERIOD_WEEK, &week);
+    }
     float x = PAD, y = STATS_Y, w = SCREEN_W - 2 * PAD;
     panel(x, y, w, STATS_H, 0, sel_k[SEL_STATS]);
+    char time[24], plays[16];
+    stats_format_time(time, sizeof(time), week.ms);
+    snprintf(plays, sizeof(plays), "%d", week.plays);
+    const char *artist = week.top_count[TOP_ARTISTS] ? lib.artists[week.top[TOP_ARTISTS][0]].name : "\xE2\x80\x94";
     float cx = x + 12, top = y + 8;
     font_draw(f_tiny, cx, top + 9, "THIS WEEK", LABEL, 1);
-    font_draw(f_big, cx, top + 30, "0m", TEXT, 0);
-    cx += fmaxf(font_width(f_tiny, "THIS WEEK", 1), font_width(f_big, "0m", 0)) + 14;
+    font_draw(f_big, cx, top + 30, time, TEXT, 0);
+    cx += fmaxf(font_width(f_tiny, "THIS WEEK", 1), font_width(f_big, time, 0)) + 14;
     font_draw(f_tiny, cx, top + 9, "Plays", LABEL, 0);
-    font_draw(f_mid, cx, top + 26, "0", TEXT, 0);
-    cx += font_width(f_tiny, "Plays", 0) + 14;
+    font_draw(f_mid, cx, top + 26, plays, TEXT, 0);
+    cx += fmaxf(font_width(f_tiny, "Plays", 0), font_width(f_mid, plays, 0)) + 14;
     font_draw(f_tiny, cx, top + 9, "Top artist", LABEL, 0);
-    font_draw_fit(f_mid, cx, top + 26, "\xE2\x80\x94", TEXT, 150);
 
     float link_w = font_width(f_small_b, "Stats \xE2\x80\xBA", 0);
     float lx = x + w - 12 - link_w;
     font_draw(f_small_b, lx, y + STATS_H / 2 + 4, "Stats \xE2\x80\xBA", ACCENT, 0);
     float chart_x = lx - 14 - 7 * 9 + 3, base = y + STATS_H / 2 + 15;
-    for (int d = 0; d < 7; d++)
-        gfx_rect(chart_x + d * 9, base - 3, 6, 3, d == 6 ? ACCENT : RGBA(255, 255, 255, 46));
+    font_draw_fit(f_mid, cx, top + 26, artist, TEXT, chart_x - 10 - cx);
+    u32 max = 1;
+    for (int d = 0; d < 7; d++) if (week.bars[d] > max) max = week.bars[d];
+    for (int d = 0; d < 7; d++) {
+        float h = week.bars[d] ? fmaxf(3, 30.0f * week.bars[d] / max) : 3;
+        gfx_rect(chart_x + d * 9, base - h, 6, h, d == 6 ? ACCENT : RGBA(255, 255, 255, 46));
+    }
 }
 
 static void draw_footer(void)

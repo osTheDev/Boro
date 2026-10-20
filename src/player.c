@@ -282,6 +282,10 @@ static int decoder_thread(SceSize args, void *argp)
 // blocks alternate: the next one is filled while the previous one plays.
 static s16 out_bufs[2][BLOCK * 2] __attribute__((aligned(64)));
 
+// The start of the latest block, mixed to mono, for the visualizers.
+#define SCOPE 256
+static volatile s16 scope[SCOPE];
+
 static int output_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
@@ -318,6 +322,7 @@ static int output_thread(SceSize args, void *argp)
             out_buf[i * 2 + 1] = ring[at * 2 + 1];
         }
         memset(out_buf + n * 2, 0, (BLOCK - n) * 4);
+        for (int i = 0; i < SCOPE; i++) scope[i] = (out_buf[i * 2] + out_buf[i * 2 + 1]) / 2;
         rd += n;
         int rate = cur_rate;
         give();
@@ -484,6 +489,13 @@ int player_queue(int *out, int max, int *first_index)
     *first_index = first;
     return n;
 }
+int player_scope(float *out, int n)
+{
+    if (n > SCOPE) n = SCOPE;
+    for (int i = 0; i < n; i++) out[i] = paused ? 0 : scope[i] / 32768.0f;
+    return n;
+}
+
 int player_index(int *total)
 {
     take();
