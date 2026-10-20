@@ -156,8 +156,46 @@ static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radiu
     return t;
 }
 
+// Image files (playlist covers) use keys above every song id.
+#define FILE_KEY 0x1000000
+#define FILES 8
+static char file_paths[FILES][320];
+static int file_next;
+
+static u8 *read_file(const char *path, u32 *size)
+{
+    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+    if (fd < 0) return NULL;
+    int n = sceIoLseek32(fd, 0, PSP_SEEK_END);
+    sceIoLseek32(fd, 0, PSP_SEEK_SET);
+    u8 *data = n > 0 && n <= 8 * 1024 * 1024 ? malloc(n) : NULL;
+    if (data && sceIoRead(fd, data, n) != n) { free(data); data = NULL; }
+    sceIoClose(fd);
+    *size = n;
+    return data;
+}
+
+static int decode_file(Job *j)
+{
+    char path[320];
+    take();
+    snprintf(path, sizeof(path), "%s", file_paths[j->song - FILE_KEY]);
+    give();
+    u32 size;
+    u8 *data = read_file(path, &size);
+    if (!data) return 0;
+    int w = 0, h = 0, png = size > 4 && data[0] == 0x89 && data[1] == 'P';
+    u8 *rgba = png ? decode_png(data, size, &w, &h) : decode_jpeg(data, size, kind_size[j->kind], &w, &h);
+    free(data);
+    if (!rgba) return 0;
+    j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color);
+    free(rgba);
+    return 1;
+}
+
 static int decode(Job *j)
 {
+    if (j->song >= FILE_KEY) return decode_file(j);
     const Song *s = &lib.songs[j->song];
     if (!s->art_type || !s->art_size || s->art_size > 8 * 1024 * 1024) return 0;
     SceUID fd = sceIoOpen(song_path(s), PSP_O_RDONLY, 0);
@@ -237,9 +275,8 @@ static Slot *claim(int kind)
     return s;
 }
 
-const Texture *art_get(int song, int kind)
+static const Texture *get(int song, int kind)
 {
-    if (song < 0 || song >= lib.song_count || !lib.songs[song].art_type) return NULL;
     Slot *s = find(song, kind);
     if (!s) {
         s = claim(kind);
@@ -254,6 +291,34 @@ const Texture *art_get(int song, int kind)
     }
     s->last_used = frame_no;
     return s->tex;
+}
+
+const Texture *art_get(int song, int kind)
+{
+    if (song < 0 || song >= lib.song_count || !lib.songs[song].art_type) return NULL;
+    return get(song, kind);
+}
+
+const Texture *art_get_file(const char *path, int kind)
+{
+    int i = 0;
+    while (i < FILES && strcmp(file_paths[i], path)) i++;
+    if (i == FILES) {
+        // Reuse the oldest path; its slots are dropped so they can't show
+        // the wrong picture.
+        i = file_next;
+        file_next = (file_next + 1) % FILES;
+        for (int k = 0; k < SLOTS; k++)
+            if (slots[k].song == FILE_KEY + i && (slots[k].tex || slots[k].failed)) {
+                tex_destroy(slots[k].tex);
+                slots[k].tex = NULL;
+                slots[k].song = -1;
+            }
+        take();
+        snprintf(file_paths[i], sizeof(file_paths[i]), "%s", path);
+        give();
+    }
+    return get(FILE_KEY + i, kind);
 }
 
 u32 art_color(int song, u32 fallback)

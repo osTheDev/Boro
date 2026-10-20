@@ -49,8 +49,9 @@ void sys_quit(void)
 
 #ifdef BORO_SCRIPT
 // Test builds replay button presses from ms0:/boro_script.txt, one
-// "<milliseconds> <button>" per line, so the emulator can reach any screen.
-static struct { u32 at; u32 button; } script[64];
+// "<milliseconds> <button> [hold milliseconds]" per line, so the emulator can
+// reach any screen.
+static struct { u32 at, until; u32 button; } script[64];
 static int script_len, script_pos;
 static u32 script_start;
 
@@ -70,10 +71,10 @@ static void load_script(void)
     buf[n > 0 ? n : 0] = 0;
     for (char *line = strtok(buf, "\n"); line && script_len < 64; line = strtok(NULL, "\n")) {
         char name[16];
-        unsigned at;
-        if (sscanf(line, "%u %15s", &at, name) != 2) continue;
+        unsigned at, hold = 0;
+        if (sscanf(line, "%u %15s %u", &at, name, &hold) < 2) continue;
         for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
-            if (!strcmp(names[i].name, name)) script[script_len++] = (typeof(script[0])){ at * 1000, names[i].bit };
+            if (!strcmp(names[i].name, name)) script[script_len++] = (typeof(script[0])){ at * 1000, (at + hold) * 1000, names[i].bit };
     }
     script_start = sceKernelGetSystemTimeLow();
 }
@@ -86,8 +87,11 @@ void sys_read_input(Input *in)
 #ifdef BORO_SCRIPT
     static int loaded;
     if (!loaded) { loaded = 1; load_script(); }
-    if (script_pos < script_len && sceKernelGetSystemTimeLow() - script_start >= script[script_pos].at)
+    u32 t = sceKernelGetSystemTimeLow() - script_start;
+    if (script_pos < script_len && t >= script[script_pos].at)
         pad.Buttons |= script[script_pos++].button;
+    for (int i = 0; i < script_pos; i++)
+        if (t < script[i].until) pad.Buttons |= script[i].button;
 #endif
     // The analog stick acts as the d-pad. A direction engages past 70% of the
     // throw and lets go under 45%, so a stick resting near center never drifts.

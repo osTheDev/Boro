@@ -26,7 +26,7 @@ static u32 wr, rd; // absolute frame counters
 static Marker marks[MARKS];
 static int mark_count;
 
-static int *order, *list, count;
+static int *order, *list, count, list_count;
 static int dec_index;            // order[] position the decoder works on
 static volatile int flush_to = -1;
 static volatile int cur_index = -1, cur_rate = 44100;
@@ -124,6 +124,26 @@ static int decode_frame(Track *t)
     return t->remaining > 0;
 }
 
+static void shuffle_from(int first);
+
+// Appends a fresh shuffle of the list to the play order. Caller holds the lock.
+static void extend_radio(void)
+{
+    int *grown = realloc(order, (count + list_count) * sizeof(int));
+    if (!grown) return;
+    order = grown;
+    int last = count ? order[count - 1] : -1, first = count;
+    memcpy(order + count, list, list_count * sizeof(int));
+    count += list_count;
+    shuffle_from(first - 1 < 0 ? 0 : first - 1);
+    // Don't repeat the song that just played.
+    if (list_count > 1 && order[first] == last) {
+        int tmp = order[first];
+        order[first] = order[first + 1];
+        order[first + 1] = tmp;
+    }
+}
+
 static int decoder_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
@@ -145,6 +165,12 @@ static int decoder_thread(SceSize args, void *argp)
         if (!open) {
             take();
             int index = dec_index, song = index < count ? order[index] : -1;
+            // Radio never runs out: another shuffled pass follows the last song.
+            if (song < 0 && locked && list_count && index == count) {
+                extend_radio();
+                give();
+                continue;
+            }
             give();
             if (song < 0) {
                 sceKernelDelayThread(10000);
@@ -270,8 +296,9 @@ void player_play(const int *songs, int n, int start, int shuf)
     list = malloc(n * sizeof(int));
     memcpy(list, songs, n * sizeof(int));
     memcpy(order, songs, n * sizeof(int));
-    count = n;
+    count = list_count = n;
     shuffle = shuf;
+    locked = 0;
     if (start < 0 || start >= n) start = shuf ? rand() % n : 0;
     if (shuf) {
         order[0] = songs[start];
@@ -315,7 +342,7 @@ void player_prev(void)
 void player_set_shuffle(int on)
 {
     take();
-    if (on == shuffle || !count) {
+    if (on == shuffle || !count || locked) {
         shuffle = on;
         give();
         return;
@@ -345,6 +372,22 @@ void player_set_shuffle(int on)
 }
 
 void player_set_locked(int on) { locked = on; }
+
+void player_jump(int index)
+{
+    if (locked || index < 0 || index >= count) return;
+    jump(index);
+}
+
+int player_queue(int *out, int max, int *first_index)
+{
+    take();
+    int first = cur_index + 1, n = 0;
+    for (int i = first; i < count && n < max; i++) out[n++] = order[i];
+    give();
+    *first_index = first;
+    return n;
+}
 int player_song(void)
 {
     int i = cur_index;

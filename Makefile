@@ -1,6 +1,6 @@
 TARGET = Boro
 OBJS = src/main.o src/sys.o src/gfx.o src/font.o src/ui.o src/home.o src/flac.o \
-       src/tags.o src/library.o src/art.o src/player.o src/volume.o src/borokernel.o src/fonts.o
+       src/tags.o src/library.o src/art.o src/player.o src/stations.o src/playlists.o src/volume.o src/borokernel.o src/fonts.o
 
 INCDIR =
 CFLAGS = -O2 -G0 -Wall -Wextra -std=gnu11 -I$(shell psp-config --psp-prefix)/include/freetype2
