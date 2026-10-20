@@ -1,4 +1,5 @@
 #include <pspkernel.h>
+#include <psppower.h>
 #include <psprtc.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,12 +29,6 @@ PSP_HEAP_SIZE_KB(-1024);
 
 enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO };
 
-// The visualizer starts after this long without a button while music plays.
-#ifdef BORO_SCRIPT
-#define IDLE_SECONDS 5.0f
-#else
-#define IDLE_SECONDS 60.0f
-#endif
 
 // The music player in the theme picked in Settings.
 static void music_enter(void)
@@ -90,6 +85,7 @@ int main(int argc, char *argv[])
     Input in;
     int mode = MODE_HOME, settings_from = MODE_HOME, last_song = -1, lists_loaded = 0, visual_on = 0, waking = 0;
     float idle_t = 0;
+    int cpu_mhz = 0;
     while (sys_running()) {
         u64 now;
         sceRtcGetCurrentTick(&now);
@@ -110,6 +106,18 @@ int main(int argc, char *argv[])
             stats_load(data_dir);
         }
         stats_frame(dt);
+        settings_frame(dt);
+        // While music plays the PSP mustn't go to sleep, and with "Keep
+        // screen on" the backlight stays up too.
+        if (player_song() >= 0 && !player_paused())
+            scePowerTick(settings.keep_on ? PSP_POWER_TICK_ALL : PSP_POWER_TICK_SUSPEND);
+        // Full speed only for video (decoding and thumbnails); menus and
+        // music run slower to save battery.
+        int want_mhz = mode == MODE_VIDEO ? 333 : 222;
+        if (want_mhz != cpu_mhz) {
+            scePowerSetClockFrequency(want_mhz, want_mhz, want_mhz / 2);
+            cpu_mhz = want_mhz;
+        }
 
         // Idle visualizer: any button (or the stick) wakes the screen, and
         // that press does nothing else.
@@ -130,7 +138,7 @@ int main(int argc, char *argv[])
             if (touched) memset(&in, 0, sizeof(in));
             else waking = 0;
         }
-        if (idle_t > IDLE_SECONDS && player_song() >= 0 && !player_paused() && !video_playing()) {
+        if (settings.idle_vis && idle_t > settings_idle_seconds() && player_song() >= 0 && !player_paused() && !video_playing()) {
             visual_on = 1;
             visual_enter();
             visual_draw(dt);

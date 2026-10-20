@@ -35,6 +35,7 @@ static volatile int cur_index = -1, cur_rate = 44100;
 static volatile u32 cur_start;
 static volatile int paused, shuffle, locked;
 static volatile int seek_to = -1; // ms into the current song, with flush_to
+static volatile float gain = 1.0f; // the sleep timer fades this out
 
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
@@ -332,7 +333,7 @@ static int output_thread(SceSize args, void *argp)
             channel_rate = rate;
         }
         sceKernelDcacheWritebackRange(out_buf, sizeof(out_bufs[0]));
-        sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, out_buf);
+        sceAudioSRCOutputBlocking((int)(PSP_AUDIO_VOLUME_MAX * gain), out_buf);
     }
     return 0;
 }
@@ -402,6 +403,8 @@ const char *player_source(int *kind)
     *kind = source_kind;
     return source_name;
 }
+
+void player_set_gain(float g) { gain = g < 0 ? 0 : g > 1 ? 1 : g; }
 
 void player_toggle_pause(void)
 {
