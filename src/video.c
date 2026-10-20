@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include "avc.h"
 #include "gfx.h"
 #include "player.h"
 #include "ui.h"
@@ -420,6 +421,9 @@ static void player_draw(void)
     } else if (!vplayer_video_ok()) {
         font_draw_center(f_tab_b, SCREEN_W / 2, 128, "The picture can't be shown here", TEXT);
         font_draw_center(f_small, SCREEN_W / 2, 146, "The sound keeps playing", MUTED);
+        char code[64];
+        snprintf(code, sizeof(code), "Code: %s", strcmp(avc_status(), "ok") ? avc_status() : "no picture");
+        font_draw_center(f_small, SCREEN_W / 2, 166, code, MUTED);
     }
 
     float a = fminf(1.0f, overlay_t / 0.3f);

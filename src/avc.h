@@ -8,7 +8,8 @@
 
 #define AVC_STRIDE 512
 
-int avc_available(void); // 0 when the firmware modules couldn't be loaded
+int avc_available(void);
+const char *avc_status(void); // "ok", or the first step that failed and its error // 0 when the firmware modules couldn't be loaded
 // Returns 0, or a negative error.
 int avc_open(const Mp4 *m);
 void avc_close(void);
