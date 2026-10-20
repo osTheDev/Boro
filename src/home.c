@@ -294,5 +294,6 @@ void home_draw(void)
     draw_stats();
     draw_footer();
     draw_toast();
+    ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }

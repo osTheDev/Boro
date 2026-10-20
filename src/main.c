@@ -7,6 +7,7 @@
 #include "gfx.h"
 #include "home.h"
 #include "library.h"
+#include "volume.h"
 #include "player.h"
 #include "sys.h"
 #include "ui.h"
@@ -35,6 +36,10 @@ int main(int argc, char *argv[])
     ui_init();
     art_init();
     player_init();
+    char app_dir[256];
+    snprintf(app_dir, sizeof(app_dir), "%s", data_dir);
+    *strrchr(app_dir, '/') = 0;
+    volume_init(app_dir);
     library_start(data_dir, music_dir);
     home_init();
 
@@ -51,6 +56,7 @@ int main(int argc, char *argv[])
 
         sys_read_input(&in);
         art_frame();
+        volume_frame(dt);
         int song = player_song();
         if (song != last_song && song >= 0) library_note_played(song);
         last_song = song;

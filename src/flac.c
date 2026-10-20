@@ -881,5 +881,6 @@ void flac_draw(float dt)
     case VIEW_NOW: draw_now(); break;
     }
     draw_toast();
+    ui_volume(F(700, 10), HEX(0x282828, 245), HEX(0x535353, 255), ACCENT, WHITE);
     gfx_end();
 }

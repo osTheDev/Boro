@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "sys.h"
+#include "volume.h"
 
 extern const char sora400_ttf[], sora400_ttf_end[], sora700_ttf[], sora700_ttf_end[];
 extern const char sora800_ttf[], sora800_ttf_end[];
@@ -144,6 +145,14 @@ static Texture *build_icon(int icon, int size)
         line(t, s, 1.8f, 9, 18, 9, 5); line(t, s, 1.8f, 9, 5, 21, 3); line(t, s, 1.8f, 21, 3, 21, 16);
         tex_stroke_circle(t, 6 * s, 18 * s, 3 * s, 1.8f * s); tex_stroke_circle(t, 18 * s, 16 * s, 3 * s, 1.8f * s);
         break;
+    case ICON_SPEAKER:
+    case ICON_MUTE: {
+        const float a[] = { 7, 9, 13, 4, 13, 20 }, b[] = { 7, 9, 13, 20, 7, 15 };
+        rect(t, s, 3, 9, 5, 6); poly(t, s, a, 3); poly(t, s, b, 3);
+        if (icon == ICON_MUTE) { line(t, s, 2, 16, 9, 22, 15); line(t, s, 2, 22, 9, 16, 15); }
+        else { arc(t, s, 2, 13, 12, 4, -0.28f * M_PI, 0.28f * M_PI); arc(t, s, 2, 13, 12, 8, -0.28f * M_PI, 0.28f * M_PI); }
+        break;
+    }
     case ICON_CROSS: line(t, s, 3, 4, 4, 20, 20); line(t, s, 3, 20, 4, 4, 20); break;
     case ICON_SQUARE: tex_stroke_round_rect(t, 4 * s, 4 * s, 16 * s, 16 * s, 1 * s, 2.8f * s); break;
     case ICON_CIRCLE: tex_stroke_circle(t, 12 * s, 12 * s, 8.5f * s, 2.8f * s); break;
@@ -231,4 +240,21 @@ float ui_approach(float v, float target, float dt, float speed)
 {
     float k = 1.0f - expf(-dt * speed);
     return v + (target - v) * k;
+}
+
+void ui_volume(Font *f, u32 panel, u32 track, u32 fill, u32 text)
+{
+    float a = volume_shown();
+    int v = volume_level();
+    if (a <= 0 || v < 0) return;
+    float w = 210, h = 30, x = (SCREEN_W - w) / 2, y = 10 - 8 * (1 - a);
+    ui_shadow(x, y + 3, w, h, h / 2, 8, RGBA(0, 0, 0, (int)(110 * a)));
+    ui_rrect(x, y, w, h, h / 2, color_alpha(panel, a));
+    ui_icon(v ? ICON_SPEAKER : ICON_MUTE, x + 12, y + 7, 16, color_alpha(text, a));
+    float bx = x + 38, bw = w - 38 - 40, by = y + h / 2 - 2;
+    ui_rrect(bx, by, bw, 4, 2, color_alpha(track, a));
+    if (v) ui_rrect(bx, by, fmaxf(4, bw * v / VOLUME_MAX), 4, 2, color_alpha(fill, a));
+    char n[12];
+    snprintf(n, sizeof(n), "%d", v);
+    font_draw_right(f, x + w - 14, y + h / 2 + font_ascent(f) * 0.4f, n, color_alpha(text, a));
 }

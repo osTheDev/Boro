@@ -8,7 +8,7 @@
 
 enum { FAMILY_SORA, FAMILY_MANROPE };
 enum { ICON_PLAY, ICON_PAUSE, ICON_NEXT, ICON_PREV, ICON_SHUFFLE, ICON_REPEAT, ICON_NOTE,
-       ICON_CROSS, ICON_SQUARE, ICON_CIRCLE, ICON_TRIANGLE, ICON_COUNT };
+       ICON_CROSS, ICON_SQUARE, ICON_CIRCLE, ICON_TRIANGLE, ICON_SPEAKER, ICON_MUTE, ICON_COUNT };
 
 void ui_init(void);
 Font *ui_font(int family, int weight, int px);
@@ -28,5 +28,7 @@ void ui_placeholder_colors(int seed, u32 *c0, u32 *c1);
 void ui_format_time(char *out, int size, u32 ms);
 // Eases v toward target; call once per frame.
 float ui_approach(float v, float target, float dt, float speed);
+// The volume bar that drops in while the volume changes, in a theme's colors.
+void ui_volume(Font *f, u32 panel, u32 track, u32 fill, u32 text);
 
 #endif

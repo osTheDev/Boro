@@ -5,7 +5,7 @@ A music and video player for the PSP (built for a PSP-3000 on ARK-5).
 ## Install
 
 1. Open the latest **Build EBOOT** run under the repository's Actions tab and download the `Boro-EBOOT` artifact.
-2. Unzip it and copy the `PSP` folder to the root of your memory stick, so the file ends up at `PSP/GAME/Boro/EBOOT.PBP`.
+2. Unzip it and copy the `PSP` folder to the root of your memory stick, so the files end up at `PSP/GAME/Boro/EBOOT.PBP` and `PSP/GAME/Boro/boro_kernel.prx` (the small helper that lets Boro show the volume bar).
 3. Launch Boro from Game → Memory Stick.
 
 ## Controls (home)
