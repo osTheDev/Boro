@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "library.h"
+#include "player.h"
 
 Station *stations;
 int station_count;
@@ -100,5 +101,18 @@ int stations_remove(int index)
     memmove(stations + index, stations + index + 1, (station_count - index - 1) * sizeof(Station));
     station_count--;
     save();
+    return 1;
+}
+
+int station_play(int index)
+{
+    const Station *st = &stations[index];
+    int *songs, count;
+    station_songs(st, &songs, &count);
+    if (!count) return 0;
+    char name[128];
+    snprintf(name, sizeof(name), "%s Radio", station_name(st));
+    player_play_from(FROM_RADIO, name, songs, count, -1, 1);
+    player_set_locked(1);
     return 1;
 }

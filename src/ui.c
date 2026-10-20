@@ -10,8 +10,12 @@ extern const char sora400_ttf[], sora400_ttf_end[], sora700_ttf[], sora700_ttf_e
 extern const char sora800_ttf[], sora800_ttf_end[];
 extern const char manrope500_ttf[], manrope500_ttf_end[], manrope700_ttf[], manrope700_ttf_end[];
 extern const char manrope800_ttf[], manrope800_ttf_end[];
+extern const char archivo400_ttf[], archivo400_ttf_end[], archivo600_ttf[], archivo600_ttf_end[];
+extern const char archivo700_ttf[], archivo700_ttf_end[];
+extern const char silkscreen400_ttf[], silkscreen400_ttf_end[], silkscreen700_ttf[], silkscreen700_ttf_end[];
+extern const char vt323_ttf[], vt323_ttf_end[];
 
-#define MAX_FONTS 40
+#define MAX_FONTS 64
 #define MAX_RADIUS 80
 #define MAX_ICONS 80
 
@@ -34,9 +38,18 @@ Font *ui_font(int family, int weight, int px)
     if (family == FAMILY_SORA) {
         data = weight >= 800 ? sora800_ttf : weight >= 600 ? sora700_ttf : sora400_ttf;
         end = weight >= 800 ? sora800_ttf_end : weight >= 600 ? sora700_ttf_end : sora400_ttf_end;
-    } else {
+    } else if (family == FAMILY_MANROPE) {
         data = weight >= 800 ? manrope800_ttf : weight >= 600 ? manrope700_ttf : manrope500_ttf;
         end = weight >= 800 ? manrope800_ttf_end : weight >= 600 ? manrope700_ttf_end : manrope500_ttf_end;
+    } else if (family == FAMILY_ARCHIVO) {
+        data = weight >= 700 ? archivo700_ttf : weight >= 600 ? archivo600_ttf : archivo400_ttf;
+        end = weight >= 700 ? archivo700_ttf_end : weight >= 600 ? archivo600_ttf_end : archivo400_ttf_end;
+    } else if (family == FAMILY_SILKSCREEN) {
+        data = weight >= 700 ? silkscreen700_ttf : silkscreen400_ttf;
+        end = weight >= 700 ? silkscreen700_ttf_end : silkscreen400_ttf_end;
+    } else {
+        data = vt323_ttf;
+        end = vt323_ttf_end;
     }
     Font *f = font_load(data, end - data, px);
     if (font_count < MAX_FONTS) fonts[font_count++] = (typeof(fonts[0])){ family, weight, px, f };

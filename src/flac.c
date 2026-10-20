@@ -13,6 +13,7 @@
 #include "library.h"
 #include "player.h"
 #include "playlists.h"
+#include "scrub.h"
 #include "stations.h"
 #include "sys.h"
 #include "ui.h"
@@ -43,7 +44,6 @@ enum { SEC_HOME, SEC_ALBUMS, SEC_ARTISTS, SEC_SONGS, SEC_PLAYLISTS, SEC_RADIO, S
 enum { VIEW_SECTION, VIEW_ALBUM, VIEW_ARTIST, VIEW_NOW, VIEW_PLAYLIST, VIEW_QUEUE, VIEW_PICK_ARTIST };
 enum { SLIDE_ALBUM, SLIDE_SONG, SLIDE_SHUFFLE };
 enum { MODAL_NONE, MODAL_ADD, MODAL_KEYBOARD, MODAL_MENU, MODAL_DELETE };
-enum { FROM_ALBUM, FROM_ARTIST, FROM_SONGS, FROM_PLAYLIST, FROM_RADIO };
 enum { MENU_RENAME, MENU_REMOVE, MENU_DELETE, MENU_COUNT };
 
 static const char *section_names[SEC_COUNT] = { "Home", "Albums", "Artists", "Songs", "Playlists", "Radio" };
@@ -77,15 +77,6 @@ static float playlist_scroll, station_scroll, pick_scroll, queue_scroll;
 static int remove_armed = -1;
 static float remove_t;
 static int queue_buf[QUEUE_MAX], queue_len, queue_first;
-
-// Where the music was started from, for now playing.
-static int from_kind;
-static char from_name[128];
-
-// Scrubbing with the analog stick on now playing: the target position while
-// the stick is pushed, applied when it lets go.
-static int scrubbing; // 1 while the stick is pushed, 2 while the seek lands
-static float scrub_ms, settle_t;
 
 // Triangle: tap and hold do different things.
 static float tri_t;
@@ -219,12 +210,7 @@ static int slide_seed(const Slide *s)
 
 // ---- Actions ---------------------------------------------------------------
 
-static void play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle)
-{
-    from_kind = kind;
-    snprintf(from_name, sizeof(from_name), "%s", name);
-    player_play(songs, count, start, shuffle);
-}
+#define play_from player_play_from
 
 static void play_album(int album, int start, int shuffle)
 {
@@ -241,14 +227,7 @@ static void play_in_album(int song)
 
 static void play_station(int index)
 {
-    const Station *st = &stations[index];
-    int *songs, count;
-    station_songs(st, &songs, &count);
-    if (!count) { show_toast("This station has no songs"); return; }
-    char name[128];
-    snprintf(name, sizeof(name), "%s Radio", station_name(st));
-    play_from(FROM_RADIO, name, songs, count, -1, 1);
-    player_set_locked(1);
+    if (!station_play(index)) { show_toast("This station has no songs"); return; }
     push(VIEW_NOW);
 }
 
@@ -522,25 +501,7 @@ static void update_artist_page(const Input *in)
 static void update_now(const Input *in, float dt)
 {
     u32 p = in->pressed;
-    // The stick scrubs: further out moves faster, up to 40 seconds a second.
-    int song = player_song(), dx = in->stick_x, dead = 40;
-    if (song >= 0 && !player_locked() && (dx > dead || dx < -dead)) {
-        if (scrubbing != 1) { scrub_ms = scrubbing ? scrub_ms : player_position_ms(); scrubbing = 1; }
-        float k = (fabsf((float)dx) - dead) / (128 - dead);
-        scrub_ms += (dx > 0 ? 1 : -1) * k * k * 40000 * dt;
-        float dur = lib.songs[song].duration_ms;
-        if (scrub_ms < 0) scrub_ms = 0;
-        if (scrub_ms > dur - 1000) scrub_ms = dur > 1000 ? dur - 1000 : 0;
-    } else if (scrubbing == 1) {
-        // Hold the bar at the target until the new position comes through.
-        scrubbing = 2;
-        settle_t = 0.6f;
-        if (song >= 0) player_seek((u32)scrub_ms);
-    } else if (scrubbing == 2) {
-        settle_t -= dt;
-        float off = (float)player_position_ms() - scrub_ms;
-        if (settle_t <= 0 || (off > -1500 && off < 1500)) scrubbing = 0;
-    }
+    scrub_update(in, dt);
     if (p & PSP_CTRL_CROSS) player_toggle_pause();
     if (p & PSP_CTRL_RTRIGGER) player_next();
     if (p & PSP_CTRL_LTRIGGER) player_prev();
@@ -771,12 +732,6 @@ int flac_update(const Input *in, float dt)
     if (library_state() != LIB_READY) {
         return (in->pressed & PSP_CTRL_CIRCLE) != 0;
     }
-    static int loaded;
-    if (!loaded) {
-        loaded = 1;
-        stations_load();
-        playlists_load();
-    }
     if (!slide_count && lib.album_count) build_slides();
 
     // Suggestions rotate every few seconds while the home section is showing.
@@ -867,7 +822,7 @@ static void draw_mini_player(void)
         const Song *s = &lib.songs[song];
         draw_art(song, ART_SMALL, 10, BAR_Y + 6, 28, 3, s->album_id);
         font_draw_fit(ft, 46, BAR_Y + 18, song_title(s), WHITE, 330);
-        font_draw_fit(fa, 46, BAR_Y + 31, player_locked() ? from_name : song_artist(s), GRAY, 330);
+        font_draw_fit(fa, 46, BAR_Y + 31, player_locked() ? player_source(&(int){0}) : song_artist(s), GRAY, 330);
         float prog = s->duration_ms ? (float)player_position_ms() / s->duration_ms : 0;
         if (prog > 1) prog = 1;
         gfx_rect(0, BAR_Y - 1, SCREEN_W, 2, HEX(0x404040, 255));
@@ -1439,7 +1394,8 @@ static void draw_now_radio(int song)
     ui_rrect(x, 16, bw, 14, 3, ACCENT);
     font_draw(fb, x + 6, 26, "ON AIR", HEX(0x000000, 255), 0);
     font_draw(f9, x + bw + 8, 27, "NO SKIPS", GRAY, 1);
-    font_draw_fit(F(800, 22), x, 62, from_name, WHITE, w);
+    int kind;
+    font_draw_fit(F(800, 22), x, 62, player_source(&kind), WHITE, w);
 
     gfx_rect(x, 80, w, 1, HEX(0xFFFFFF, 40));
     font_draw(f9, x, 104, player_paused() ? "PAUSED" : "NOW PLAYING", player_paused() ? GRAY : ACCENT, 1);
@@ -1480,6 +1436,8 @@ static void draw_now(void)
     Font *f9 = F(500, 9);
     static const char *from_labels[] = { "PLAYING FROM ALBUM", "PLAYING FROM ARTIST", "PLAYING FROM SONGS",
                                          "PLAYING FROM PLAYLIST", "PLAYING FROM RADIO" };
+    int from_kind;
+    const char *from_name = player_source(&from_kind);
     font_draw(f9, x, 27, from_labels[from_kind], GRAY, 1);
     float right = SCREEN_W - 18;
     ui_battery(f9, right, 23, GRAY);
@@ -1495,7 +1453,7 @@ static void draw_now(void)
     font_draw_fit(F(500, 12), x, 158, song_artist(s), GRAY, w);
 
     // Progress.
-    u32 pos = scrubbing ? (u32)scrub_ms : player_position_ms(), dur = s->duration_ms;
+    u32 pos = scrub_position(), dur = s->duration_ms;
     float prog = dur ? (float)pos / dur : 0;
     if (prog > 1) prog = 1;
     float py = 170;

@@ -18,6 +18,9 @@ int station_art_song(const Station *s); // -1 when none of its songs has art
 void station_songs(const Station *s, int **songs, int *count);
 // Returns the station's index, creating it when needed.
 int stations_add(int radio, int id);
+// Starts the station: its songs shuffled endlessly, no skips. Returns 0 when
+// it has no songs.
+int station_play(int index);
 // Only user-created stations can be removed. Returns 1 when removed.
 int stations_remove(int index);
 

@@ -12,6 +12,11 @@ void player_init(void);
 // Plays songs[start], then the rest of the list. With shuffle, the list is
 // shuffled with songs[start] first.
 void player_play(const int *songs, int count, int start, int shuffle);
+
+// Where playback was started from, shown by every theme's now playing.
+enum { FROM_ALBUM, FROM_ARTIST, FROM_SONGS, FROM_PLAYLIST, FROM_RADIO };
+void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle);
+const char *player_source(int *kind); // the name, like "Night Drive" or "Nova Lane Radio"
 void player_toggle_pause(void);
 void player_next(void);
 void player_prev(void); // restarts the song if more than 3 seconds in
@@ -27,6 +32,7 @@ void player_jump(int index);
 // position of out[0].
 int player_queue(int *out, int max, int *first_index);
 
+int player_index(int *total); // position in play order, and the list length
 int player_song(void); // the audible song, or -1 when nothing is loaded
 int player_paused(void);
 int player_shuffle(void);
