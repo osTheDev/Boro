@@ -18,6 +18,7 @@ typedef struct {
     u32 start; // ring position of the track's first frame
     int index; // position in order[]
     int rate;
+    u32 offset; // frames skipped by a seek, so positions still count from 0
 } Marker;
 
 static SceUID lock;
@@ -32,6 +33,7 @@ static volatile int flush_to = -1;
 static volatile int cur_index = -1, cur_rate = 44100;
 static volatile u32 cur_start;
 static volatile int paused, shuffle, locked;
+static volatile int seek_to = -1; // ms into the current song, with flush_to
 
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
@@ -46,6 +48,7 @@ typedef struct {
     int handle;
     u32 skip, remaining; // gapless trimming, in frames
     int rate;
+    u32 offset; // frames skipped by a seek
 } Track;
 
 static int feed(Track *t)
@@ -67,14 +70,43 @@ static void close_track(Track *t)
     t->handle = t->fd = -1;
 }
 
-static int open_track(Track *t, int song)
+static int song_rate(const Song *s) { return s->sample_rate > 0 ? s->sample_rate : 44100; }
+
+// Finds the first MP3 frame header at or after pos, so a seek can start
+// decoding mid-file. Returns pos unchanged when none turns up nearby.
+static u32 find_frame(SceUID fd, u32 pos, int rate)
+{
+    static const int rates[3] = { 44100, 48000, 32000 };
+    u8 buf[4096];
+    if (sceIoLseek32(fd, pos, PSP_SEEK_SET) < 0) return pos;
+    int n = sceIoRead(fd, buf, sizeof(buf));
+    for (int i = 0; i + 3 < n; i++) {
+        if (buf[i] != 0xFF || (buf[i + 1] & 0xE0) != 0xE0) continue;
+        int version = (buf[i + 1] >> 3) & 3, layer = (buf[i + 1] >> 1) & 3;
+        int bitrate = buf[i + 2] >> 4, sr = (buf[i + 2] >> 2) & 3;
+        if (version == 1 || layer != 1 || bitrate == 0 || bitrate == 15 || sr == 3) continue;
+        int hz = rates[sr] >> (version == 3 ? 0 : version == 2 ? 1 : 2);
+        if (hz == rate) return pos + i;
+    }
+    return pos;
+}
+
+static int open_track(Track *t, int song, u32 start_ms)
 {
     const Song *s = &lib.songs[song];
     t->handle = -1;
+    t->offset = 0;
     t->fd = sceIoOpen(song_path(s), PSP_O_RDONLY, 0);
     if (t->fd < 0) return -1;
+    u32 start = s->audio_start;
+    if (start_ms && s->duration_ms && start_ms < s->duration_ms) {
+        // Byte position scaled by time: exact for CBR, close for VBR.
+        start += (u32)((u64)(s->audio_end - s->audio_start) * start_ms / s->duration_ms);
+        start = find_frame(t->fd, start, song_rate(s));
+        t->offset = (u32)((u64)start_ms * song_rate(s) / 1000);
+    }
     SceMp3InitArg init = {
-        .mp3StreamStart = s->audio_start,
+        .mp3StreamStart = start,
         .mp3StreamEnd = s->audio_end,
         .mp3Buf = mp3_buf,
         .mp3BufSize = sizeof(mp3_buf),
@@ -90,6 +122,10 @@ static int open_track(Track *t, int song)
     t->rate = sceMp3GetSamplingRate(t->handle);
     t->skip = s->enc_delay >= 0 ? s->enc_delay + DECODER_DELAY : 0;
     t->remaining = s->total_samples ? s->total_samples : 0xFFFFFFFF;
+    if (t->offset) {
+        t->skip = DECODER_DELAY;
+        t->remaining = t->remaining > t->offset ? t->remaining - t->offset : 0;
+    }
     return 0;
 }
 
@@ -147,8 +183,9 @@ static void extend_radio(void)
 static int decoder_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    Track t = { -1, -1, 0, 0, 0 };
+    Track t = { -1, -1, 0, 0, 0, 0 };
     int open = 0;
+    u32 start_ms = 0;
     for (;;) {
         if (flush_to >= 0) {
             if (open) close_track(&t);
@@ -158,7 +195,10 @@ static int decoder_thread(SceSize args, void *argp)
             rd = wr = 0;
             mark_count = 0;
             cur_index = flush_to < count ? flush_to : -1;
+            start_ms = seek_to > 0 ? seek_to : 0;
+            seek_to = -1;
             cur_start = 0;
+            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(&lib.songs[order[cur_index]]) / 1000);
             flush_to = -1;
             give();
         }
@@ -176,7 +216,9 @@ static int decoder_thread(SceSize args, void *argp)
                 sceKernelDelayThread(10000);
                 continue;
             }
-            if (open_track(&t, song) < 0) {
+            int failed = open_track(&t, song, start_ms) < 0;
+            start_ms = 0;
+            if (failed) {
                 take();
                 if (flush_to < 0) dec_index++;
                 give();
@@ -185,7 +227,7 @@ static int decoder_thread(SceSize args, void *argp)
             open = 1;
             take();
             if (mark_count == MARKS) memmove(marks, marks + 1, --mark_count * sizeof(Marker));
-            marks[mark_count++] = (Marker){ wr, index, t.rate };
+            marks[mark_count++] = (Marker){ wr, index, t.rate, t.offset };
             give();
         }
         take();
@@ -225,7 +267,7 @@ static int output_thread(SceSize args, void *argp)
         // Tracks become audible when the read position reaches their marker.
         while (mark_count && marks[0].start <= rd) {
             cur_index = marks[0].index;
-            cur_start = marks[0].start;
+            cur_start = marks[0].start - marks[0].offset;
             cur_rate = marks[0].rate;
             memmove(marks, marks + 1, --mark_count * sizeof(Marker));
         }
@@ -372,6 +414,16 @@ void player_set_shuffle(int on)
 }
 
 void player_set_locked(int on) { locked = on; }
+
+void player_seek(u32 ms)
+{
+    if (locked || cur_index < 0) return;
+    take();
+    seek_to = ms;
+    paused = 0;
+    flush_to = cur_index;
+    give();
+}
 
 void player_jump(int index)
 {

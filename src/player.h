@@ -19,6 +19,8 @@ void player_set_shuffle(int on);
 // Radio mode: next/prev do nothing and the list reshuffles endlessly. Cleared
 // by player_play.
 void player_set_locked(int on);
+// Restarts the current song ms in. Ignored in radio mode.
+void player_seek(u32 ms);
 // Plays the order[] position index (from player_queue). Ignored in radio mode.
 void player_jump(int index);
 // Songs after the current one, in play order. *first_index is the order[]

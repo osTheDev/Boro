@@ -82,6 +82,11 @@ static int queue_buf[QUEUE_MAX], queue_len, queue_first;
 static int from_kind;
 static char from_name[128];
 
+// Scrubbing with the analog stick on now playing: the target position while
+// the stick is pushed, applied when it lets go.
+static int scrubbing; // 1 while the stick is pushed, 2 while the seek lands
+static float scrub_ms, settle_t;
+
 // Triangle: tap and hold do different things.
 static float tri_t;
 static int tri_fired;
@@ -514,9 +519,28 @@ static void update_artist_page(const Input *in)
     if (p & PSP_CTRL_CIRCLE) pop();
 }
 
-static void update_now(const Input *in)
+static void update_now(const Input *in, float dt)
 {
     u32 p = in->pressed;
+    // The stick scrubs: further out moves faster, up to 40 seconds a second.
+    int song = player_song(), dx = in->stick_x, dead = 40;
+    if (song >= 0 && !player_locked() && (dx > dead || dx < -dead)) {
+        if (scrubbing != 1) { scrub_ms = scrubbing ? scrub_ms : player_position_ms(); scrubbing = 1; }
+        float k = (fabsf((float)dx) - dead) / (128 - dead);
+        scrub_ms += (dx > 0 ? 1 : -1) * k * k * 40000 * dt;
+        float dur = lib.songs[song].duration_ms;
+        if (scrub_ms < 0) scrub_ms = 0;
+        if (scrub_ms > dur - 1000) scrub_ms = dur > 1000 ? dur - 1000 : 0;
+    } else if (scrubbing == 1) {
+        // Hold the bar at the target until the new position comes through.
+        scrubbing = 2;
+        settle_t = 0.6f;
+        if (song >= 0) player_seek((u32)scrub_ms);
+    } else if (scrubbing == 2) {
+        settle_t -= dt;
+        float off = (float)player_position_ms() - scrub_ms;
+        if (settle_t <= 0 || (off > -1500 && off < 1500)) scrubbing = 0;
+    }
     if (p & PSP_CTRL_CROSS) player_toggle_pause();
     if (p & PSP_CTRL_RTRIGGER) player_next();
     if (p & PSP_CTRL_LTRIGGER) player_prev();
@@ -800,7 +824,7 @@ int flac_update(const Input *in, float dt)
         break;
     case VIEW_ALBUM: update_album_page(in); break;
     case VIEW_ARTIST: update_artist_page(in); break;
-    case VIEW_NOW: update_now(in); break;
+    case VIEW_NOW: update_now(in, dt); break;
     case VIEW_PLAYLIST: update_playlist_page(in); break;
     case VIEW_QUEUE: update_queue(in); break;
     case VIEW_PICK_ARTIST: update_pick_artist(in); break;
@@ -1394,10 +1418,53 @@ static void draw_queue(float dt)
     draw_hints(SCREEN_W - 14, SCREEN_H - 6, g, l, 2, F(500, 9));
 }
 
+// Radio has no skips or seeking, so its now playing shows the station and
+// the song instead of transport controls.
+static void draw_now_radio(int song)
+{
+    const Song *s = &lib.songs[song];
+    u32 c = darken(art_tint(song, s->album_id), 0.55f);
+    gfx_rect(0, 0, SCREEN_W, SCREEN_H, BG);
+    gfx_gradient(0, 0, SCREEN_W, SCREEN_H, c, color_lerp(c, BG, 0.55f), color_lerp(c, BG, 0.75f), BG);
+
+    ui_shadow(18, 61 + 10, 150, 150, 6, 18, RGBA(0, 0, 0, 140));
+    const Texture *t = art_get(song, ART_LARGE);
+    if (t) gfx_tex(t, 18, 61, 150, 150, WHITE);
+    else draw_art(song, ART_SMALL, 18, 61, 150, 6, s->album_id);
+
+    float x = 186, w = SCREEN_W - 18 - x, right = SCREEN_W - 18;
+    Font *f9 = F(500, 9), *fb = F(800, 9);
+    ui_battery(f9, right, 23, GRAY);
+    float bw = font_width(fb, "ON AIR", 0) + 12;
+    ui_rrect(x, 16, bw, 14, 3, ACCENT);
+    font_draw(fb, x + 6, 26, "ON AIR", HEX(0x000000, 255), 0);
+    font_draw(f9, x + bw + 8, 27, "NO SKIPS", GRAY, 1);
+    font_draw_fit(F(800, 22), x, 62, from_name, WHITE, w);
+
+    gfx_rect(x, 80, w, 1, HEX(0xFFFFFF, 40));
+    font_draw(f9, x, 104, player_paused() ? "PAUSED" : "NOW PLAYING", player_paused() ? GRAY : ACCENT, 1);
+    // Level bars beside the label while music plays.
+    if (!player_paused()) {
+        float bx = x + font_width(f9, "NOW PLAYING", 1) + 10;
+        for (int i = 0; i < 4; i++) {
+            float h = 3 + 7 * (0.5f + 0.5f * sinf(t_now * (5 + i) + i * 1.7f));
+            ui_rrect(bx + i * 5, 104 - h, 3, h, 1, ACCENT);
+        }
+    }
+    font_draw_fit(F(800, 18), x, 128, song_title(s), WHITE, w);
+    font_draw_fit(F(500, 11), x, 146, song_artist(s), LIGHT, w);
+    font_draw_fit(F(500, 10), x, 162, song_album(s), GRAY, w);
+
+    const int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
+    const char *l[] = { player_paused() ? "Play" : "Pause", "Up next", "Back" };
+    draw_hints(SCREEN_W - 18, SCREEN_H - 12, g, l, 3, F(500, 8));
+}
+
 static void draw_now(void)
 {
     int song = player_song();
     if (song < 0) { pop(); return; }
+    if (player_locked()) { draw_now_radio(song); return; }
     const Song *s = &lib.songs[song];
     u32 c = darken(art_tint(song, s->album_id), 0.55f);
     gfx_rect(0, 0, SCREEN_W, SCREEN_H, BG);
@@ -1428,7 +1495,7 @@ static void draw_now(void)
     font_draw_fit(F(500, 12), x, 158, song_artist(s), GRAY, w);
 
     // Progress.
-    u32 pos = player_position_ms(), dur = s->duration_ms;
+    u32 pos = scrubbing ? (u32)scrub_ms : player_position_ms(), dur = s->duration_ms;
     float prog = dur ? (float)pos / dur : 0;
     if (prog > 1) prog = 1;
     float py = 170;

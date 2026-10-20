@@ -105,6 +105,7 @@ void sys_read_input(Input *in)
         else if (dirs[i].v < 58) stick &= ~dirs[i].bit;
     }
     pad.Buttons |= stick;
+    in->stick_x = dx;
     in->held = pad.Buttons;
     in->pressed = pad.Buttons & ~last_buttons;
     in->nav = in->pressed;
