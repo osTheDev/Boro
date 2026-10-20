@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release with this tag, like v1.0 (leave empty to only build)'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -22,21 +27,24 @@ jobs:
           name: Boro-EBOOT
           path: dist
 
-  # A pushed v* tag publishes a GitHub release with the zip to copy to the PSP.
+  # A pushed v* tag, or a manual run given a tag name, publishes a GitHub
+  # release with the zip to copy to the PSP.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.release || github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: Boro-EBOOT
           path: dist
       - name: Zip
-        run: cd dist && zip -r "../Boro-${GITHUB_REF_NAME}.zip" PSP
+        run: cd dist && zip -r "../Boro-${TAG}.zip" PSP
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "Boro-${GITHUB_REF_NAME}.zip" --repo "$GITHUB_REPOSITORY" --title "Boro $GITHUB_REF_NAME" --notes "Copy the PSP folder from the zip to the root of your memory stick, then launch Boro from the XMB. Music goes in MUSIC/ (radio-only artists in MUSIC/RADIO/<Artist>/), videos in VIDEO/Movies, VIDEO/Shows or VIDEO/Clips."
+        run: gh release create "$TAG" "Boro-${TAG}.zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Boro $TAG" --notes "Copy the PSP folder from the zip to the root of your memory stick, then launch Boro from the XMB. Music goes in MUSIC/ (radio-only artists in MUSIC/RADIO/<Artist>/), videos in VIDEO/Movies, VIDEO/Shows or VIDEO/Clips."
