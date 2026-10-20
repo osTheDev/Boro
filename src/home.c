@@ -3,12 +3,12 @@
 #include <math.h>
 #include <pspctrl.h>
 #include <stdio.h>
+#include "art.h"
 #include "font.h"
 #include "gfx.h"
-
-extern const char sora400_ttf[], sora400_ttf_end[];
-extern const char sora700_ttf[], sora700_ttf_end[];
-extern const char sora800_ttf[], sora800_ttf_end[];
+#include "library.h"
+#include "player.h"
+#include "ui.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
 
@@ -80,21 +80,21 @@ static Texture *button_glyph(int kind)
 
 void home_init(void)
 {
-    f_logo = font_load(sora800_ttf, sora800_ttf_end - sora800_ttf, 16);
-    f_title = font_load(sora700_ttf, sora700_ttf_end - sora700_ttf, 22);
-    f_big = font_load(sora700_ttf, sora700_ttf_end - sora700_ttf, 18);
-    f_mid = font_load(sora700_ttf, sora700_ttf_end - sora700_ttf, 13);
-    f_small = font_load(sora400_ttf, sora400_ttf_end - sora400_ttf, 11);
-    f_small_b = font_load(sora700_ttf, sora700_ttf_end - sora700_ttf, 10);
-    f_tiny = font_load(sora400_ttf, sora400_ttf_end - sora400_ttf, 10);
+    f_logo = ui_font(FAMILY_SORA, 800, 16);
+    f_title = ui_font(FAMILY_SORA, 700, 22);
+    f_big = ui_font(FAMILY_SORA, 700, 18);
+    f_mid = ui_font(FAMILY_SORA, 700, 13);
+    f_small = ui_font(FAMILY_SORA, 400, 11);
+    f_small_b = ui_font(FAMILY_SORA, 700, 10);
+    f_tiny = ui_font(FAMILY_SORA, 400, 10);
 
     t_glow = tex_glow(128);
     t_fill16 = tex_round_fill(16);
     t_ring16 = tex_round_ring(16, 1.5f);
-    t_shadow16 = tex_round_shadow(16, 18);
+    t_shadow16 = tex_round_shadow(16, 18, 1);
     t_fill14 = tex_round_fill(14);
     t_ring14 = tex_round_ring(14, 1.5f);
-    t_shadow14 = tex_round_shadow(14, 18);
+    t_shadow14 = tex_round_shadow(14, 18, 1);
     t_music = icon_music();
     t_video = icon_video();
     t_thumb = tex_round_gradient(58, 33, 6, HEX(0x2B3A67, 255), HEX(0xC46A8A, 255));
@@ -110,7 +110,7 @@ static void show_toast(const char *msg)
     toast_t = 2.2f;
 }
 
-void home_update(const Input *in, float dt)
+int home_update(const Input *in, float dt)
 {
     t_now += dt;
     if (toast_t > 0) toast_t -= dt;
@@ -122,10 +122,8 @@ void home_update(const Input *in, float dt)
     if (p & PSP_CTRL_UP && sel == SEL_STATS) sel = last_tile;
 
     if (p & PSP_CTRL_CROSS) {
-        static const char *later[SEL_COUNT] = {
-            "Music arrives in milestone 1", "Video arrives in milestone 5", "Stats arrive in milestone 4"
-        };
-        show_toast(later[sel]);
+        if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
+        show_toast(sel == SEL_VIDEO ? "Video arrives in milestone 5" : "Stats arrive in milestone 4");
     }
     if (p & PSP_CTRL_SQUARE) show_toast("Settings arrive in milestone 6");
     if (p & PSP_CTRL_CIRCLE) sys_quit();
@@ -134,6 +132,7 @@ void home_update(const Input *in, float dt)
         float target = i == sel ? 1.0f : 0.0f;
         sel_k[i] += (target - sel_k[i]) * fminf(1.0f, dt * 12.0f);
     }
+    return HOME_STAY;
 }
 
 // Glass panel: optional accent glow, translucent fill, hairline border.
@@ -215,8 +214,12 @@ static void draw_tiles(void)
             gfx_tex(t_thumb, x + TILE_W - 14 - 58, y + 12, 58, 33, 0xFFFFFFFF);
         }
         font_draw(f_title, x + 14, y + TILE_H - 34, i == 0 ? "Music" : "Video", TEXT, 0);
-        font_draw(f_tiny, x + 14, y + TILE_H - 16,
-                  i == 0 ? "FL/AC theme \xC2\xB7 Playlists \xC2\xB7 Radio" : "Browse your videos", SUBTLE, 0);
+        char sub[64];
+        if (i == 0 && library_state() != LIB_READY)
+            snprintf(sub, sizeof(sub), "Scanning\xE2\x80\xA6 %d songs", library_scan_count());
+        else
+            snprintf(sub, sizeof(sub), "%s", i == 0 ? "FL/AC theme \xC2\xB7 Playlists \xC2\xB7 Radio" : "Browse your videos");
+        font_draw(f_tiny, x + 14, y + TILE_H - 16, sub, SUBTLE, 0);
     }
 }
 
@@ -245,8 +248,16 @@ static void draw_stats(void)
 static void draw_footer(void)
 {
     float y = SCREEN_H - 8 - 16;
-    gfx_tex(t_art, PAD, y, 16, 16, 0xFFFFFFFF);
-    font_draw(f_tiny, PAD + 24, y + 12, "Nothing playing", MUTED, 0);
+    int song = player_song();
+    const Texture *art = song >= 0 ? art_get(song, ART_SMALL) : NULL;
+    gfx_tex(art ? art : t_art, PAD, y, 16, 16, 0xFFFFFFFF);
+    if (song >= 0) {
+        char line[300];
+        snprintf(line, sizeof(line), "%s \xC2\xB7 %s", song_title(&lib.songs[song]), song_artist(&lib.songs[song]));
+        font_draw_fit(f_tiny, PAD + 24, y + 12, line, MUTED, 230);
+    } else {
+        font_draw(f_tiny, PAD + 24, y + 12, "Nothing playing", MUTED, 0);
+    }
 
     static const char *labels[3] = { "Open", "Settings", "Exit" };
     Texture *glyphs[3] = { t_cross, t_square, t_circle };

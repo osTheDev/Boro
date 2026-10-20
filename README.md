@@ -17,10 +17,25 @@ A music and video player for the PSP (built for a PSP-3000 on ARK-5).
 | □ | Settings |
 | ○ | Exit to the XMB |
 
+## Music
+
+Put MP3s anywhere under `MUSIC/` on the memory stick. Boro reads their ID3 tags and embedded album art, and caches the library in `PSP/GAME/Boro/data/`, so only new or changed files are read on later launches.
+
+Artists in `MUSIC/RADIO/<Artist>/` are radio-only: they never show up in Albums, Artists or Songs.
+
+| Button | FL/AC |
+| --- | --- |
+| D-pad | Move; left from the content goes to the sidebar |
+| ✕ | Open / play |
+| □ | Shuffle (album, artist, songs); sort albums |
+| △ or SELECT | Now playing (on an artist page △ is radio) |
+| L / R | Page through long lists; skip on Now playing |
+| ○ | Back |
+
 ## Building locally
 
 Install the [pspdev toolchain](https://github.com/pspdev/pspdev), then run `make`.
 
 ## Credits
 
-Sora font by The Sora Project Authors, under the SIL Open Font License 1.1 (`res/fonts/OFL.txt`).
+Sora (The Sora Project Authors) and Manrope (The Manrope Project Authors) fonts, under the SIL Open Font License 1.1 (`res/fonts/OFL-*.txt`).

@@ -4,8 +4,10 @@
 
 #include "sys.h"
 
+enum { HOME_STAY, HOME_OPEN_MUSIC };
+
 void home_init(void);
-void home_update(const Input *in, float dt);
+int home_update(const Input *in, float dt);
 void home_draw(void);
 
 #endif

@@ -18,17 +18,23 @@ u32 color_lerp(u32 a, u32 b, float t);
 typedef struct {
     int w, h;   // used size
     int tw, th; // allocated power-of-two size
-    u32 *px;    // tw * th pixels, 16-byte aligned
+    int alpha8; // 1: px holds one alpha byte per texel (white, tinted when drawn)
+    u32 *px;    // tw * th texels, 16-byte aligned
 } Texture;
 
 Texture *tex_create(int w, int h);
-void tex_upload(Texture *t); // call after writing pixels
+Texture *tex_create_alpha8(int w, int h);
+void tex_destroy(Texture *t);
+void tex_upload(Texture *t);                    // call after writing pixels
+void tex_upload_rows(Texture *t, int y, int h); // cheaper when only some rows changed
 
 // Alpha-only textures (white RGB), tinted when drawn.
 Texture *tex_glow(int size);                              // soft radial falloff
 Texture *tex_round_fill(float r);                         // rounded rect for 9-slice, border = ceil(r)
 Texture *tex_round_ring(float r, float width);            // rounded outline for 9-slice
-Texture *tex_round_shadow(float r, float blur);           // blurred rounded rect, border = ceil(r + blur)
+// Blurred rounded rect, border = ceil(r + blur). Hollow leaves the inside clear
+// (a glow around a translucent panel); otherwise it is a filled drop shadow.
+Texture *tex_round_shadow(float r, float blur, int hollow);
 Texture *tex_round_gradient(int w, int h, float r, u32 c0, u32 c1); // 135deg gradient with rounded corners
 
 // Vector-ish shapes stroked into an alpha texture (accumulates coverage).
@@ -48,5 +54,9 @@ void gfx_tex(const Texture *t, float x, float y, float w, float h, u32 color);
 void gfx_tex_part(const Texture *t, float sx, float sy, float sw, float sh,
                   float x, float y, float w, float h, u32 color);
 void gfx_nine(const Texture *t, int border, float x, float y, float w, float h, u32 color);
+// Four corner colors: top-left, top-right, bottom-left, bottom-right.
+void gfx_gradient(float x, float y, float w, float h, u32 tl, u32 tr, u32 bl, u32 br);
+void gfx_clip(int x, int y, int w, int h);
+void gfx_unclip(void);
 
 #endif
