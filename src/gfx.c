@@ -123,8 +123,9 @@ Texture *tex_round_shadow(float r, float blur)
     for (int y = 0; y < s; y++)
         for (int x = 0; x < s; x++) {
             float d = sd_round_box(x + 0.5f, y + 0.5f, s * 0.5f, s * 0.5f, h, h, r);
+            // Outside only, like a CSS box-shadow: the panel itself stays clear.
             float k = 1.0f - clampf(d / blur, 0, 1);
-            put_alpha(t, x, y, k * k * k);
+            put_alpha(t, x, y, k * k * k * clampf(d + 0.5f, 0, 1));
         }
     tex_upload(t);
     return t;
