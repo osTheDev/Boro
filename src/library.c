@@ -330,7 +330,11 @@ static void build_views(void)
         r->name = group_artist(&lib.songs[radio_order[i]]);
         r->songs = &radio_order[i];
         r->count = j - i;
-        for (int k = i; k < j; k++) lib.songs[radio_order[k]].radio_id = lib.radio_count;
+        r->art_song = -1;
+        for (int k = i; k < j; k++) {
+            lib.songs[radio_order[k]].radio_id = lib.radio_count;
+            if (r->art_song < 0 && lib.songs[radio_order[k]].art_type) r->art_song = radio_order[k];
+        }
         lib.radio_count++;
         i = j;
     }
@@ -458,4 +462,33 @@ int library_state(void)
 int library_scan_count(void)
 {
     return scan_count;
+}
+
+const char *library_data_dir(void) { return data_dir; }
+const char *library_music_dir(void) { return music_dir; }
+
+// ---- Lookup by path -------------------------------------------------------
+
+static int *by_path;
+
+static int cmp_path(const void *a, const void *b)
+{
+    return strcmp(song_path(&lib.songs[*(const int *)a]), song_path(&lib.songs[*(const int *)b]));
+}
+
+int library_find_path(const char *path)
+{
+    if (!by_path) {
+        by_path = malloc((lib.song_count + 1) * sizeof(int));
+        for (int i = 0; i < lib.song_count; i++) by_path[i] = i;
+        qsort(by_path, lib.song_count, sizeof(int), cmp_path);
+    }
+    int lo = 0, hi = lib.song_count - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2, r = strcmp(song_path(&lib.songs[by_path[mid]]), path);
+        if (!r) return by_path[mid];
+        if (r < 0) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
 }

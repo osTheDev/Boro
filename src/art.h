@@ -13,6 +13,8 @@ void art_init(void);
 const Texture *art_get(int song, int kind);
 // Average color of the art (opaque), or the fallback while unknown.
 u32 art_color(int song, u32 fallback);
+// Same, for a JPEG or PNG file (playlist covers).
+const Texture *art_get_file(const char *path, int kind);
 void art_frame(void); // once per frame: collects finished decodes
 
 #endif

@@ -37,6 +37,7 @@ typedef struct {
 typedef struct {
     const char *name; // folder name under MUSIC/RADIO
     int *songs, count;
+    int art_song;
 } RadioArtist;
 
 typedef struct {
@@ -74,5 +75,9 @@ int *library_albums_sorted(int by_artist);
 // Recently played albums, newest first (album ids).
 int library_recent(int *out, int max);
 void library_note_played(int song);
+
+const char *library_data_dir(void);  // like ms0:/PSP/GAME/Boro/data
+const char *library_music_dir(void); // like ms0:/MUSIC
+int library_find_path(const char *path); // song id, or -1
 
 #endif

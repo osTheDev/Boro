@@ -13,7 +13,7 @@ extern const char manrope800_ttf[], manrope800_ttf_end[];
 
 #define MAX_FONTS 40
 #define MAX_RADIUS 80
-#define MAX_ICONS 48
+#define MAX_ICONS 80
 
 static struct { int family, weight, px; Font *font; } fonts[MAX_FONTS];
 static int font_count;
@@ -153,6 +153,17 @@ static Texture *build_icon(int icon, int size)
         else { arc(t, s, 2, 13, 12, 4, -0.28f * M_PI, 0.28f * M_PI); arc(t, s, 2, 13, 12, 8, -0.28f * M_PI, 0.28f * M_PI); }
         break;
     }
+    case ICON_PLUS: line(t, s, 2.5f, 12, 5, 12, 19); line(t, s, 2.5f, 5, 12, 19, 12); break;
+    case ICON_BACKSPACE:
+        line(t, s, 1.8f, 8, 6, 21, 6); line(t, s, 1.8f, 21, 6, 21, 18); line(t, s, 1.8f, 21, 18, 8, 18);
+        line(t, s, 1.8f, 8, 18, 2, 12); line(t, s, 1.8f, 2, 12, 8, 6);
+        line(t, s, 1.8f, 12, 9, 17, 15); line(t, s, 1.8f, 17, 9, 12, 15);
+        break;
+    case ICON_SHIFT:
+        line(t, s, 1.8f, 12, 3, 21, 12); line(t, s, 1.8f, 21, 12, 16, 12); line(t, s, 1.8f, 16, 12, 16, 20);
+        line(t, s, 1.8f, 16, 20, 8, 20); line(t, s, 1.8f, 8, 20, 8, 12); line(t, s, 1.8f, 8, 12, 3, 12);
+        line(t, s, 1.8f, 3, 12, 12, 3);
+        break;
     case ICON_CROSS: line(t, s, 3, 4, 4, 20, 20); line(t, s, 3, 20, 4, 4, 20); break;
     case ICON_SQUARE: tex_stroke_round_rect(t, 4 * s, 4 * s, 16 * s, 16 * s, 1 * s, 2.8f * s); break;
     case ICON_CIRCLE: tex_stroke_circle(t, 12 * s, 12 * s, 8.5f * s, 2.8f * s); break;
