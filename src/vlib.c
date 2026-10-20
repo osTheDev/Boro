@@ -13,7 +13,7 @@
 
 #define THUMB_W 160
 #define THUMB_H 90
-#define THUMB_MAGIC 0x31485442 // "BTH1"
+#define THUMB_MAGIC 0x32485442 // "BTH2": BTH1 files were made while decoding was broken
 #define LOADED 12              // thumbnail textures kept in memory
 
 Video *videos;
