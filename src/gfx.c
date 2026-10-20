@@ -11,6 +11,7 @@
 
 static unsigned int __attribute__((aligned(16))) list[262144];
 static const Texture *bound;
+static u32 __attribute__((aligned(16))) alpha_clut[256]; // white, alpha = index
 
 typedef struct { float u, v; u32 color; float x, y, z; } TVert;
 typedef struct { u32 color; float x, y, z; } CVert;
@@ -55,9 +56,36 @@ Texture *tex_create(int w, int h)
     return t;
 }
 
+Texture *tex_create_alpha8(int w, int h)
+{
+    Texture *t = calloc(1, sizeof(Texture));
+    t->w = w;
+    t->h = h;
+    t->tw = pow2(w);
+    t->th = pow2(h);
+    t->alpha8 = 1;
+    t->px = memalign(16, t->tw * t->th);
+    memset(t->px, 0, t->tw * t->th);
+    return t;
+}
+
+void tex_destroy(Texture *t)
+{
+    if (!t) return;
+    if (bound == t) bound = NULL;
+    free(t->px);
+    free(t);
+}
+
 void tex_upload(Texture *t)
 {
-    sceKernelDcacheWritebackRange(t->px, t->tw * t->th * 4);
+    tex_upload_rows(t, 0, t->th);
+}
+
+void tex_upload_rows(Texture *t, int y, int h)
+{
+    int bpp = t->alpha8 ? 1 : 4;
+    sceKernelDcacheWritebackRange((char *)t->px + y * t->tw * bpp, h * t->tw * bpp);
     if (bound == t) bound = NULL;
 }
 
@@ -115,7 +143,7 @@ Texture *tex_round_ring(float r, float width)
     return t;
 }
 
-Texture *tex_round_shadow(float r, float blur)
+Texture *tex_round_shadow(float r, float blur, int hollow)
 {
     int b = (int)ceilf(r + blur), s = 2 * b + 2;
     Texture *t = tex_create(s, s);
@@ -123,9 +151,8 @@ Texture *tex_round_shadow(float r, float blur)
     for (int y = 0; y < s; y++)
         for (int x = 0; x < s; x++) {
             float d = sd_round_box(x + 0.5f, y + 0.5f, s * 0.5f, s * 0.5f, h, h, r);
-            // Outside only, like a CSS box-shadow: the panel itself stays clear.
             float k = 1.0f - clampf(d / blur, 0, 1);
-            put_alpha(t, x, y, k * k * k * clampf(d + 0.5f, 0, 1));
+            put_alpha(t, x, y, k * k * k * (hollow ? clampf(d + 0.5f, 0, 1) : 1.0f));
         }
     tex_upload(t);
     return t;
@@ -205,6 +232,9 @@ void tex_stroke_round_rect(Texture *t, float x, float y, float w, float h, float
 
 void gfx_init(void)
 {
+    for (int i = 0; i < 256; i++) alpha_clut[i] = 0x00FFFFFF | ((u32)i << 24);
+    sceKernelDcacheWritebackRange(alpha_clut, sizeof(alpha_clut));
+
     void *fbp0 = guGetStaticVramBuffer(BUF_W, SCREEN_H, GU_PSM_8888);
     void *fbp1 = guGetStaticVramBuffer(BUF_W, SCREEN_H, GU_PSM_8888);
 
@@ -265,9 +295,41 @@ static void bind(const Texture *t)
 {
     sceGuEnable(GU_TEXTURE_2D);
     if (bound == t) return;
+    if (t->alpha8) {
+        sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
+        sceGuClutLoad(256 / 8, alpha_clut);
+        sceGuTexMode(GU_PSM_T8, 0, 0, 0);
+    } else {
+        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    }
     sceGuTexImage(0, t->tw, t->th, t->tw, t->px);
     sceGuTexFlush();
     bound = t;
+}
+
+void gfx_gradient(float x, float y, float w, float h, u32 tl, u32 tr, u32 bl, u32 br)
+{
+    CVert *v = sceGuGetMemory(4 * sizeof(CVert));
+    v[0] = (CVert){ tl, x, y, 0 };
+    v[1] = (CVert){ bl, x, y + h, 0 };
+    v[2] = (CVert){ tr, x + w, y, 0 };
+    v[3] = (CVert){ br, x + w, y + h, 0 };
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_TRIANGLE_STRIP, CVERT_FMT, 4, 0, v);
+}
+
+void gfx_clip(int x, int y, int w, int h)
+{
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > SCREEN_W) w = SCREEN_W - x;
+    if (y + h > SCREEN_H) h = SCREEN_H - y;
+    sceGuScissor(x, y, x + (w > 0 ? w : 0), y + (h > 0 ? h : 0));
+}
+
+void gfx_unclip(void)
+{
+    sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
 }
 
 void gfx_tex_part(const Texture *t, float sx, float sy, float sw, float sh,

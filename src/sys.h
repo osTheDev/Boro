@@ -7,6 +7,7 @@
 typedef struct {
     u32 held;    // buttons down this frame
     u32 pressed; // buttons that went down this frame
+    u32 nav;     // pressed, plus auto-repeat while the d-pad or L/R is held
 } Input;
 
 void sys_init(void);
