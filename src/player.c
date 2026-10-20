@@ -56,6 +56,7 @@ static int feed(Track *t)
     if (sceIoLseek32(t->fd, pos, PSP_SEEK_SET) < 0) return -1;
     int got = sceIoRead(t->fd, dst, want);
     if (got < 0) return -1;
+    sceKernelDcacheWritebackRange(dst, got); // the Media Engine reads it from memory
     return sceMp3NotifyAddStreamData(t->handle, got) < 0 ? -1 : got;
 }
 
@@ -99,6 +100,9 @@ static int decode_frame(Track *t)
     SceShort16 *pcm;
     int bytes = sceMp3Decode(t->handle, &pcm);
     if (bytes <= 0) return 0;
+    // The Media Engine writes the PCM straight to memory: drop any stale
+    // cached copy before the CPU reads it.
+    sceKernelDcacheInvalidateRange(pcm_buf, sizeof(pcm_buf));
     u32 frames = bytes / 4; // the decoder always outputs 16-bit stereo
     if (t->skip) {
         u32 n = t->skip < frames ? t->skip : frames;
@@ -178,12 +182,14 @@ static int decoder_thread(SceSize args, void *argp)
 
 // ---- Output -----------------------------------------------------------------
 
-static s16 out_buf[BLOCK * 2] __attribute__((aligned(64)));
+// The hardware keeps reading a block after the output call returns, so two
+// blocks alternate: the next one is filled while the previous one plays.
+static s16 out_bufs[2][BLOCK * 2] __attribute__((aligned(64)));
 
 static int output_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    int channel_rate = 0;
+    int channel_rate = 0, which = 0;
     for (;;) {
         if (paused) {
             sceKernelDelayThread(10000);
@@ -208,6 +214,8 @@ static int output_thread(SceSize args, void *argp)
             sceKernelDelayThread(3000);
             continue;
         }
+        s16 *out_buf = out_bufs[which];
+        which ^= 1;
         for (u32 i = 0; i < n; i++) {
             u32 at = (rd + i) % RING;
             out_buf[i * 2] = ring[at * 2];
@@ -222,6 +230,7 @@ static int output_thread(SceSize args, void *argp)
             sceAudioSRCChReserve(BLOCK, rate, 2);
             channel_rate = rate;
         }
+        sceKernelDcacheWritebackRange(out_buf, sizeof(out_bufs[0]));
         sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, out_buf);
     }
     return 0;
