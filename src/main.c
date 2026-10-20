@@ -7,6 +7,12 @@
 #include "gfx.h"
 #include "home.h"
 #include "library.h"
+#include "music.h"
+#include "playlists.h"
+#include "deck.h"
+#include "pod.h"
+#include "settings.h"
+#include "stations.h"
 #include "volume.h"
 #include "player.h"
 #include "sys.h"
@@ -16,7 +22,29 @@ PSP_MODULE_INFO("Boro", PSP_MODULE_USER, 0, 1);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-enum { MODE_HOME, MODE_MUSIC };
+enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS };
+
+// The music player in the theme picked in Settings.
+static void music_enter(void)
+{
+    if (settings.theme == THEME_DECK) deck_enter();
+    else if (settings.theme == THEME_POD) pod_enter();
+    else flac_enter();
+}
+
+static int music_update(const Input *in, float dt)
+{
+    if (settings.theme == THEME_DECK) return deck_update(in, dt);
+    if (settings.theme == THEME_POD) return pod_update(in, dt);
+    return flac_update(in, dt);
+}
+
+static void music_draw(float dt)
+{
+    if (settings.theme == THEME_DECK) deck_draw(dt);
+    else if (settings.theme == THEME_POD) pod_draw(dt);
+    else flac_draw(dt);
+}
 
 int main(int argc, char *argv[])
 {
@@ -32,6 +60,7 @@ int main(int argc, char *argv[])
     }
 
     sys_init();
+    settings_load(data_dir);
     gfx_init();
     ui_init();
     art_init();
@@ -46,7 +75,7 @@ int main(int argc, char *argv[])
     u64 tick_res = sceRtcGetTickResolution(), last;
     sceRtcGetCurrentTick(&last);
     Input in;
-    int mode = MODE_HOME, last_song = -1;
+    int mode = MODE_HOME, settings_from = MODE_HOME, last_song = -1, lists_loaded = 0;
     while (sys_running()) {
         u64 now;
         sceRtcGetCurrentTick(&now);
@@ -60,16 +89,38 @@ int main(int argc, char *argv[])
         int song = player_song();
         if (song != last_song && song >= 0) library_note_played(song);
         last_song = song;
+        if (!lists_loaded && library_state() == LIB_READY) {
+            lists_loaded = 1;
+            stations_load();
+            playlists_load();
+        }
 
         if (mode == MODE_HOME) {
-            if (home_update(&in, dt) == HOME_OPEN_MUSIC) {
+            int r = home_update(&in, dt);
+            if (r == HOME_OPEN_MUSIC) {
                 mode = MODE_MUSIC;
-                flac_enter();
+                music_enter();
+            } else if (r == HOME_OPEN_SETTINGS) {
+                mode = MODE_SETTINGS;
+                settings_from = MODE_HOME;
+                settings_enter();
             }
-            home_draw();
+            if (mode == MODE_HOME) home_draw();
+        } else if (mode == MODE_SETTINGS) {
+            if (settings_update(&in, dt)) {
+                mode = settings_from;
+                if (mode == MODE_MUSIC) music_enter();
+            }
+            if (mode == MODE_SETTINGS) settings_draw();
         } else {
-            if (flac_update(&in, dt)) mode = MODE_HOME;
-            flac_draw(dt);
+            int r = music_update(&in, dt);
+            if (r == MUSIC_HOME) mode = MODE_HOME;
+            else if (r == MUSIC_SETTINGS) {
+                mode = MODE_SETTINGS;
+                settings_from = MODE_MUSIC;
+                settings_enter();
+            }
+            if (mode == MODE_MUSIC) music_draw(dt);
         }
     }
     sceKernelExitGame();

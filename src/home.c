@@ -8,6 +8,7 @@
 #include "gfx.h"
 #include "library.h"
 #include "player.h"
+#include "settings.h"
 #include "ui.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
@@ -125,7 +126,7 @@ int home_update(const Input *in, float dt)
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
         show_toast(sel == SEL_VIDEO ? "Video arrives in milestone 5" : "Stats arrive in milestone 4");
     }
-    if (p & PSP_CTRL_START) show_toast("Settings arrive in milestone 6");
+    if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
     if (p & PSP_CTRL_CIRCLE) sys_quit();
 
@@ -218,8 +219,10 @@ static void draw_tiles(void)
         char sub[64];
         if (i == 0 && library_state() != LIB_READY)
             snprintf(sub, sizeof(sub), "Scanning\xE2\x80\xA6 %d songs", library_scan_count());
+        else if (i == 0)
+            snprintf(sub, sizeof(sub), "%s theme \xC2\xB7 Playlists \xC2\xB7 Radio", theme_names[settings.theme]);
         else
-            snprintf(sub, sizeof(sub), "%s", i == 0 ? "FL/AC theme \xC2\xB7 Playlists \xC2\xB7 Radio" : "Browse your videos");
+            snprintf(sub, sizeof(sub), "Browse your videos");
         font_draw(f_tiny, x + 14, y + TILE_H - 16, sub, SUBTLE, 0);
     }
 }

@@ -5,6 +5,7 @@
 #include <pspkernel.h>
 #include <pspmp3.h>
 #include <psputility.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "library.h"
@@ -381,6 +382,22 @@ void player_play(const int *songs, int n, int start, int shuf)
     give();
 }
 
+static int source_kind;
+static char source_name[128];
+
+void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle)
+{
+    source_kind = kind;
+    snprintf(source_name, sizeof(source_name), "%s", name);
+    player_play(songs, count, start, shuffle);
+}
+
+const char *player_source(int *kind)
+{
+    *kind = source_kind;
+    return source_name;
+}
+
 void player_toggle_pause(void)
 {
     if (cur_index >= 0) paused = !paused;
@@ -466,6 +483,14 @@ int player_queue(int *out, int max, int *first_index)
     give();
     *first_index = first;
     return n;
+}
+int player_index(int *total)
+{
+    take();
+    int i = cur_index;
+    *total = count;
+    give();
+    return i;
 }
 int player_song(void)
 {

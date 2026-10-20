@@ -7,7 +7,7 @@
 #include "gfx.h"
 
 #define PAGE 512
-#define MAX_PAGES 6
+#define MAX_PAGES 8
 
 typedef struct {
     u32 code;
