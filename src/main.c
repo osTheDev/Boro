@@ -14,7 +14,9 @@
 #include "settings.h"
 #include "stations.h"
 #include "stats.h"
+#include "video.h"
 #include "visual.h"
+#include "vlib.h"
 #include "volume.h"
 #include "player.h"
 #include "sys.h"
@@ -24,7 +26,7 @@ PSP_MODULE_INFO("Boro", PSP_MODULE_USER, 0, 1);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS };
+enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO };
 
 // The visualizer starts after this long without a button while music plays.
 #ifdef BORO_SCRIPT
@@ -59,13 +61,14 @@ int main(int argc, char *argv[])
 {
     // argv[0] is like "ms0:/PSP/GAME/Boro/EBOOT.PBP": keep data next to the
     // EBOOT and read music from MUSIC on the same device.
-    char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC";
+    char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC", video_dir[64] = "ms0:/VIDEO";
     if (argc > 0 && argv[0] && strchr(argv[0], ':')) {
         snprintf(data_dir, sizeof(data_dir), "%s", argv[0]);
         char *slash = strrchr(data_dir, '/');
         if (slash) strcpy(slash, "/data");
         int dev = strchr(argv[0], ':') - argv[0];
         snprintf(music_dir, sizeof(music_dir), "%.*s:/MUSIC", dev, argv[0]);
+        snprintf(video_dir, sizeof(video_dir), "%.*s:/VIDEO", dev, argv[0]);
     }
 
     sys_init();
@@ -79,6 +82,7 @@ int main(int argc, char *argv[])
     *strrchr(app_dir, '/') = 0;
     volume_init(app_dir);
     library_start(data_dir, music_dir);
+    vlib_init(data_dir, video_dir);
     home_init();
 
     u64 tick_res = sceRtcGetTickResolution(), last;
@@ -126,7 +130,7 @@ int main(int argc, char *argv[])
             if (touched) memset(&in, 0, sizeof(in));
             else waking = 0;
         }
-        if (idle_t > IDLE_SECONDS && player_song() >= 0 && !player_paused()) {
+        if (idle_t > IDLE_SECONDS && player_song() >= 0 && !player_paused() && !video_playing()) {
             visual_on = 1;
             visual_enter();
             visual_draw(dt);
@@ -138,6 +142,9 @@ int main(int argc, char *argv[])
             if (r == HOME_OPEN_MUSIC) {
                 mode = MODE_MUSIC;
                 music_enter();
+            } else if (r == HOME_OPEN_VIDEO) {
+                mode = MODE_VIDEO;
+                video_enter();
             } else if (r == HOME_OPEN_STATS) {
                 mode = MODE_STATS;
                 stats_enter();
@@ -147,6 +154,9 @@ int main(int argc, char *argv[])
                 settings_enter();
             }
             if (mode == MODE_HOME) home_draw();
+        } else if (mode == MODE_VIDEO) {
+            if (video_update(&in, dt)) mode = MODE_HOME;
+            if (mode == MODE_VIDEO) video_draw(dt);
         } else if (mode == MODE_STATS) {
             if (stats_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_STATS) stats_draw(dt);

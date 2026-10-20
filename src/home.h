@@ -4,7 +4,7 @@
 
 #include "sys.h"
 
-enum { HOME_STAY, HOME_OPEN_MUSIC, HOME_OPEN_SETTINGS, HOME_OPEN_STATS };
+enum { HOME_STAY, HOME_OPEN_MUSIC, HOME_OPEN_SETTINGS, HOME_OPEN_STATS, HOME_OPEN_VIDEO };
 
 void home_init(void);
 int home_update(const Input *in, float dt);

@@ -1,5 +1,5 @@
 TARGET = boro_kernel
-OBJS = main.o
+OBJS = main.o mecore.o
 
 CFLAGS = -O2 -G0 -Wall -Wextra
 ASFLAGS = $(CFLAGS)
