@@ -125,7 +125,8 @@ int home_update(const Input *in, float dt)
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
         show_toast(sel == SEL_VIDEO ? "Video arrives in milestone 5" : "Stats arrive in milestone 4");
     }
-    if (p & PSP_CTRL_SQUARE) show_toast("Settings arrive in milestone 6");
+    if (p & PSP_CTRL_START) show_toast("Settings arrive in milestone 6");
+    if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
     if (p & PSP_CTRL_CIRCLE) sys_quit();
 
     for (int i = 0; i < SEL_COUNT; i++) {
@@ -259,14 +260,16 @@ static void draw_footer(void)
         font_draw(f_tiny, PAD + 24, y + 12, "Nothing playing", MUTED, 0);
     }
 
-    static const char *labels[3] = { "Open", "Settings", "Exit" };
-    Texture *glyphs[3] = { t_cross, t_square, t_circle };
+    static const char *labels[3] = { "Open", "START Settings", "Exit" };
+    Texture *glyphs[3] = { t_cross, NULL, t_circle };
     float x = SCREEN_W - PAD;
     for (int i = 2; i >= 0; i--) {
         x -= font_width(f_tiny, labels[i], 0);
         font_draw(f_tiny, x, y + 12, labels[i], MUTED, 0);
-        x -= 13;
-        gfx_tex(glyphs[i], x, y + 3, 10, 10, MUTED);
+        if (glyphs[i]) {
+            x -= 13;
+            gfx_tex(glyphs[i], x, y + 3, 10, 10, MUTED);
+        }
         x -= 8;
     }
 }

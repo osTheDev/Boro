@@ -34,7 +34,7 @@ void sys_init(void)
     int th = sceKernelCreateThread("boro_callbacks", callback_thread, 0x11, 0xFA0, 0, NULL);
     if (th >= 0) sceKernelStartThread(th, 0, NULL);
     sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 }
 
 int sys_running(void)
@@ -89,6 +89,18 @@ void sys_read_input(Input *in)
     if (script_pos < script_len && sceKernelGetSystemTimeLow() - script_start >= script[script_pos].at)
         pad.Buttons |= script[script_pos++].button;
 #endif
+    // The analog stick acts as the d-pad. A direction engages past 70% of the
+    // throw and lets go under 45%, so a stick resting near center never drifts.
+    static u32 stick;
+    int dx = pad.Lx - 128, dy = pad.Ly - 128;
+    struct { int v; u32 bit; } dirs[] = {
+        { -dx, PSP_CTRL_LEFT }, { dx, PSP_CTRL_RIGHT }, { -dy, PSP_CTRL_UP }, { dy, PSP_CTRL_DOWN },
+    };
+    for (int i = 0; i < 4; i++) {
+        if (dirs[i].v > 90) stick |= dirs[i].bit;
+        else if (dirs[i].v < 58) stick &= ~dirs[i].bit;
+    }
+    pad.Buttons |= stick;
     in->held = pad.Buttons;
     in->pressed = pad.Buttons & ~last_buttons;
     in->nav = in->pressed;

@@ -260,7 +260,7 @@ static void update_albums(const Input *in)
     if (n & PSP_CTRL_DOWN && album_sel + 4 < count) album_sel += 4;
     if (n & PSP_CTRL_LTRIGGER) album_sel = clampi(album_sel - 8, 0, count - 1);
     if (n & PSP_CTRL_RTRIGGER) album_sel = clampi(album_sel + 8, 0, count - 1);
-    if (p & PSP_CTRL_SQUARE) {
+    if (p & PSP_CTRL_START) {
         int id = library_albums_sorted(album_sort)[album_sel];
         album_sort = !album_sort;
         int *order = library_albums_sorted(album_sort);
@@ -303,7 +303,7 @@ static void update_section(const Input *in)
     case SEC_SONGS:
         update_list(in, &song_sel, lib.songs_az_count, 6);
         if (p & PSP_CTRL_CROSS && lib.songs_az_count) player_play(lib.songs_az, lib.songs_az_count, song_sel, 0);
-        if (p & PSP_CTRL_SQUARE && lib.songs_az_count) { player_play(lib.songs_az, lib.songs_az_count, -1, 1); push(VIEW_NOW); }
+        if (p & PSP_CTRL_START && lib.songs_az_count) { player_play(lib.songs_az, lib.songs_az_count, -1, 1); push(VIEW_NOW); }
         break;
     case SEC_RADIO:
         if (n & PSP_CTRL_LEFT) sidebar_focus = 1;
@@ -318,7 +318,7 @@ static void update_album_page(const Input *in)
     if (n & PSP_CTRL_UP) page_sel = clampi(page_sel - 1, 0, a->count - 1);
     if (n & PSP_CTRL_DOWN) page_sel = clampi(page_sel + 1, 0, a->count - 1);
     if (p & PSP_CTRL_CROSS) play_album(page_album, page_sel, 0);
-    if (p & PSP_CTRL_SQUARE) { play_album(page_album, -1, 1); push(VIEW_NOW); }
+    if (p & PSP_CTRL_START) { play_album(page_album, -1, 1); push(VIEW_NOW); }
     if (p & PSP_CTRL_CIRCLE) pop();
 }
 
@@ -339,7 +339,7 @@ static void update_artist_page(const Input *in)
         if (n & PSP_CTRL_DOWN && page_album_sel + 2 < ar->album_count) page_album_sel += 2;
         if (p & PSP_CTRL_CROSS) open_album(ar->albums[page_album_sel]);
     }
-    if (p & PSP_CTRL_SQUARE) { player_play(ar->songs, ar->song_count, -1, 1); push(VIEW_NOW); }
+    if (p & PSP_CTRL_START) { player_play(ar->songs, ar->song_count, -1, 1); push(VIEW_NOW); }
     if (p & PSP_CTRL_TRIANGLE) show_toast("Artist radio arrives in milestone 2");
     if (p & PSP_CTRL_CIRCLE) pop();
 }
@@ -383,6 +383,8 @@ int flac_update(const Input *in, float dt)
         else show_toast("Nothing is playing");
         return 0;
     }
+    // □ plays and pauses from every screen except now playing, where it shuffles.
+    if (v != VIEW_NOW && (in->pressed & PSP_CTRL_SQUARE) && player_song() >= 0) player_toggle_pause();
     switch (v) {
     case VIEW_SECTION:
         if (sidebar_focus && (in->pressed & PSP_CTRL_CIRCLE)) return 1;
@@ -455,8 +457,9 @@ static void draw_header(const char *title, int size, const char *right_hint)
     float right = SCREEN_W - 12;
     ui_battery(small, right, 17, GRAY);
     if (right_hint) {
-        float w = ui_hint_width(small, ICON_SQUARE, right_hint);
-        ui_hint(small, right - 62 - w, 20, ICON_SQUARE, right_hint, GRAY);
+        char hint[48];
+        snprintf(hint, sizeof(hint), "START %s", right_hint);
+        font_draw(small, right - 62 - font_width(small, hint, 0), 20, hint, GRAY, 0);
     }
 }
 
@@ -712,8 +715,8 @@ static void draw_album_page(float dt)
         draw_song_row(a->songs[i], 20, top + i * row - page_scroll, SCREEN_W - 40, i == page_sel, s->track ? s->track : i + 1);
     }
     gfx_unclip();
-    const int g[] = { ICON_CROSS, ICON_SQUARE, ICON_TRIANGLE, ICON_CIRCLE };
-    const char *l[] = { "Play", "Shuffle", "Now playing", "Back" };
+    const int g[] = { ICON_CROSS, -1, ICON_TRIANGLE, ICON_CIRCLE };
+    const char *l[] = { "Play", "START Shuffle", "Now playing", "Back" };
     draw_hints(SCREEN_W - 14, SCREEN_H - 6, g, l, 4, F(500, 9));
 }
 
@@ -761,8 +764,8 @@ static void draw_artist_page(float dt)
     }
     gfx_unclip();
 
-    const int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, -1, ICON_CIRCLE };
-    const char *l[] = { "Play", "Start radio", "Shuffle", "L/R Songs\xC2\xB7" "Albums", "Back" };
+    const int g[] = { ICON_CROSS, ICON_TRIANGLE, -1, -1, ICON_CIRCLE };
+    const char *l[] = { "Play", "Start radio", "START Shuffle", "L/R Songs\xC2\xB7" "Albums", "Back" };
     draw_hints(SCREEN_W - 14, SCREEN_H - 6, g, l, 5, F(500, 9));
 }
 
