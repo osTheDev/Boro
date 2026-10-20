@@ -10,6 +10,7 @@
 #include <strings.h>
 #include "avc.h"
 #include "mp4.h"
+#include "settings.h"
 
 #define THUMB_W 160
 #define THUMB_H 90
@@ -99,6 +100,7 @@ void vlib_set_resume(int index, u32 ms)
 int vlib_continue(void)
 {
     int best = -1;
+    if (!settings.resume_videos) return -1;
     for (int i = 0; i < video_count; i++)
         if (videos[i].resume_ms && (best < 0 || videos[i].watched > videos[best].watched)) best = i;
     return best;

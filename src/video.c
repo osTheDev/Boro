@@ -10,6 +10,7 @@
 #include "avc.h"
 #include "gfx.h"
 #include "player.h"
+#include "settings.h"
 #include "ui.h"
 #include "vlib.h"
 #include "vplayer.h"
@@ -92,6 +93,9 @@ static void init(void)
     t_dot = tex_round_fill(18);
 }
 
+// Where a video picks up: nowhere when resuming is off in Settings.
+static u32 resume_of(const Video *v) { return settings.resume_videos ? v->resume_ms : 0; }
+
 // ---- Browser ----------------------------------------------------------------
 
 static int cmp_recent(const void *a, const void *b)
@@ -171,7 +175,7 @@ static int browser_update(const Input *in)
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
     if (nav & PSP_CTRL_RIGHT && sel < list_count - 1) sel++;
     Video *v = &videos[list[sel]];
-    if (p & PSP_CTRL_CROSS) start(list[sel], v->resume_ms);
+    if (p & PSP_CTRL_CROSS) start(list[sel], resume_of(v));
     else if (p & PSP_CTRL_TRIANGLE) start(list[sel], 0);
     return 0;
 }
@@ -229,9 +233,9 @@ static void draw_hero(void)
     float cx = HERO_X + HERO_W / 2, cy = HERO_Y + HERO_H / 2;
     gfx_nine(t_dot, 18, cx - 18, cy - 18, 36, 36, RGBA(0, 0, 0, 115));
     ui_icon(ICON_PLAY, cx - 7, cy - 8, 16, 0xFFFFFFFF);
-    if (v->resume_ms && v->duration_ms) {
+    if (resume_of(v) && v->duration_ms) {
         gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W, 4, RGBA(255, 255, 255, 51));
-        gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W * (float)v->resume_ms / v->duration_ms, 4, ACCENT);
+        gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W * (float)resume_of(v) / v->duration_ms, 4, ACCENT);
     }
     round_corners(HERO_X, HERO_Y, HERO_W, HERO_H, 8, BG);
     char buf[64];
@@ -264,8 +268,8 @@ static void draw_hero(void)
     else snprintf(buf, sizeof(buf), "%s \xC2\xB7 MP4", cat_names[v->category]);
     font_draw_fit(f_small, x, y, buf, MUTED, w);
     char when[24];
-    if (v->resume_ms) {
-        ui_format_time(when, sizeof(when), v->resume_ms);
+    if (resume_of(v)) {
+        ui_format_time(when, sizeof(when), resume_of(v));
         snprintf(buf, sizeof(buf), "Stopped at %s", when);
     } else {
         snprintf(buf, sizeof(buf), v->watched ? "Watched" : "Not watched yet");
@@ -273,11 +277,11 @@ static void draw_hero(void)
     font_draw(f_small, x, y + 15, buf, HEX(0xC9CBD4, 255), 0);
 
     float by = HERO_Y + HERO_H - 22;
-    const char *first = v->resume_ms ? "Resume" : "Play";
+    const char *first = resume_of(v) ? "Resume" : "Play";
     float bw = font_width(f_small_b, first, 0) + 20;
     gfx_nine(t_fill12, 12, x, by, bw, 22, ACCENT);
     font_draw(f_small_b, x + 10, by + 15, first, BG, 0);
-    if (v->resume_ms) {
+    if (resume_of(v)) {
         float x2 = x + bw + 6, bw2 = font_width(f_small_b, "Start over", 0) + 20;
         gfx_nine(t_fill12, 12, x2, by, bw2, 22, PILL);
         font_draw(f_small_b, x2 + 10, by + 15, "Start over", TEXT, 0);
@@ -297,9 +301,9 @@ static void draw_row(float dt)
         if (i == sel) ui_rrect(x - 1, ROW_Y - 1, TILE_W + 2, TILE_H + 2, 7, BG);
         draw_thumb(list[i], x, ROW_Y, TILE_W, TILE_H);
         const Video *v = &videos[list[i]];
-        if (v->resume_ms && v->duration_ms) {
+        if (resume_of(v) && v->duration_ms) {
             gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W, 3, RGBA(255, 255, 255, 51));
-            gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W * (float)v->resume_ms / v->duration_ms, 3, ACCENT);
+            gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W * (float)resume_of(v) / v->duration_ms, 3, ACCENT);
         }
         round_corners(x, ROW_Y, TILE_W, TILE_H, 6, BG);
         font_draw_fit(f_tiny, x, ROW_Y + TILE_H + 13, v->title, i == sel ? TEXT : MUTED, TILE_W);
@@ -334,7 +338,7 @@ static void browser_draw(float dt)
     } else {
         draw_hero();
         draw_row(dt);
-        int resume = videos[list[sel]].resume_ms != 0;
+        int resume = resume_of(&videos[list[sel]]) != 0;
         int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, ICON_CIRCLE };
         const char *l[] = { resume ? "Resume" : "Play", "Start over", "Sort", "Back" };
         draw_hints(g, l, 4, SCREEN_W - 14, SCREEN_H - 8, MUTED);

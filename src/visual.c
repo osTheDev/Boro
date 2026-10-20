@@ -358,7 +358,10 @@ void visual_draw(float dt)
     t_now += dt;
     hue = fmodf(hue + speeds[settings.deck_speed] * dt, 360);
     scene_t += dt;
-    if (scene_t >= SCENE_SECONDS) {
+    if (settings.vis_style > 0) {
+        // One scene picked in Settings.
+        if (scene != settings.vis_style - 1) { scene = settings.vis_style - 1; part_count = 0; }
+    } else if (scene_t >= SCENE_SECONDS) {
         scene_t = 0;
         scene = (scene + 1) % SCENE_COUNT;
         part_count = 0;
@@ -395,7 +398,8 @@ void visual_draw(float dt)
     float pulse = 0.35f + 0.35f * (0.5f + 0.5f * sinf(t_now * 3.14159265f / 2));
     font_draw(ui_font(FAMILY_VT323, 400, 26), 14, 28, clock, color_alpha(fg, pulse + 0.3f), 0);
     char name[48];
-    snprintf(name, sizeof(name), "%s \xC2\xB7 %d/%d", scene_names[scene], scene + 1, SCENE_COUNT);
+    if (settings.vis_style > 0) snprintf(name, sizeof(name), "%s", scene_names[scene]);
+    else snprintf(name, sizeof(name), "%s \xC2\xB7 %d/%d", scene_names[scene], scene + 1, SCENE_COUNT);
     Font *fs = ui_font(FAMILY_SILKSCREEN, 400, 8);
     font_draw_right(fs, SCREEN_W - 70, 19, name, color_alpha(fg, 0.7f));
     draw_battery(SCREEN_W - 40, 16, fg);

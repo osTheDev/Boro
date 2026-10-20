@@ -18,6 +18,7 @@ enum { FROM_ALBUM, FROM_ARTIST, FROM_SONGS, FROM_PLAYLIST, FROM_RADIO };
 void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle);
 const char *player_source(int *kind); // the name, like "Night Drive" or "Nova Lane Radio"
 void player_toggle_pause(void);
+void player_set_gain(float g); // 0..1, on top of the system volume
 void player_next(void);
 void player_prev(void); // restarts the song if more than 3 seconds in
 void player_set_shuffle(int on);
