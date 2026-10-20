@@ -49,6 +49,8 @@ typedef struct {
     u32 skip, remaining; // gapless trimming, in frames
     int rate;
     u32 offset; // frames skipped by a seek
+    int errors; // bad frames so far, tolerated after a seek
+    u32 total;  // remaining when decoding started
 } Track;
 
 static int feed(Track *t)
@@ -72,23 +74,38 @@ static void close_track(Track *t)
 
 static int song_rate(const Song *s) { return s->sample_rate > 0 ? s->sample_rate : 44100; }
 
-// Finds the first MP3 frame header at or after pos, so a seek can start
-// decoding mid-file. Returns pos unchanged when none turns up nearby.
-static u32 find_frame(SceUID fd, u32 pos, int rate)
+// Length in bytes of the Layer III frame whose header starts at h, or 0 when
+// h isn't a header for the given sample rate.
+static int frame_length(const u8 *h, int rate)
 {
     static const int rates[3] = { 44100, 48000, 32000 };
-    u8 buf[4096];
-    if (sceIoLseek32(fd, pos, PSP_SEEK_SET) < 0) return pos;
+    static const short kbps[2][15] = {
+        { 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 }, // MPEG 1
+        { 0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160 },     // MPEG 2 / 2.5
+    };
+    if (h[0] != 0xFF || (h[1] & 0xE0) != 0xE0) return 0;
+    int version = (h[1] >> 3) & 3, layer = (h[1] >> 1) & 3;
+    int bitrate = h[2] >> 4, sr = (h[2] >> 2) & 3, pad = (h[2] >> 1) & 1;
+    if (version == 1 || layer != 1 || bitrate == 0 || bitrate == 15 || sr == 3) return 0;
+    int hz = rates[sr] >> (version == 3 ? 0 : version == 2 ? 1 : 2);
+    if (hz != rate) return 0;
+    int mpeg1 = version == 3;
+    return (mpeg1 ? 144000 : 72000) * kbps[!mpeg1][bitrate] / hz + pad;
+}
+
+// Finds the first MP3 frame at or after pos, checked by the frame right
+// after it, so a seek can start decoding mid-file. Returns 0 when none
+// turns up nearby.
+static u32 find_frame(SceUID fd, u32 pos, int rate)
+{
+    static u8 buf[8192];
+    if (sceIoLseek32(fd, pos, PSP_SEEK_SET) < 0) return 0;
     int n = sceIoRead(fd, buf, sizeof(buf));
-    for (int i = 0; i + 3 < n; i++) {
-        if (buf[i] != 0xFF || (buf[i + 1] & 0xE0) != 0xE0) continue;
-        int version = (buf[i + 1] >> 3) & 3, layer = (buf[i + 1] >> 1) & 3;
-        int bitrate = buf[i + 2] >> 4, sr = (buf[i + 2] >> 2) & 3;
-        if (version == 1 || layer != 1 || bitrate == 0 || bitrate == 15 || sr == 3) continue;
-        int hz = rates[sr] >> (version == 3 ? 0 : version == 2 ? 1 : 2);
-        if (hz == rate) return pos + i;
+    for (int i = 0; i + 4 < n; i++) {
+        int len = frame_length(buf + i, rate);
+        if (len >= 24 && i + len + 4 <= n && frame_length(buf + i + len, rate)) return pos + i;
     }
-    return pos;
+    return 0;
 }
 
 static int open_track(Track *t, int song, u32 start_ms)
@@ -101,10 +118,13 @@ static int open_track(Track *t, int song, u32 start_ms)
     u32 start = s->audio_start;
     if (start_ms && s->duration_ms && start_ms < s->duration_ms) {
         // Byte position scaled by time: exact for CBR, close for VBR.
-        start += (u32)((u64)(s->audio_end - s->audio_start) * start_ms / s->duration_ms);
-        start = find_frame(t->fd, start, song_rate(s));
-        t->offset = (u32)((u64)start_ms * song_rate(s) / 1000);
+        u32 at = find_frame(t->fd, start + (u32)((u64)(s->audio_end - s->audio_start) * start_ms / s->duration_ms), song_rate(s));
+        if (at) {
+            start = at;
+            t->offset = (u32)((u64)start_ms * song_rate(s) / 1000);
+        }
     }
+    t->errors = 0;
     SceMp3InitArg init = {
         .mp3StreamStart = start,
         .mp3StreamEnd = s->audio_end,
@@ -126,6 +146,7 @@ static int open_track(Track *t, int song, u32 start_ms)
         t->skip = DECODER_DELAY;
         t->remaining = t->remaining > t->offset ? t->remaining - t->offset : 0;
     }
+    t->total = t->remaining;
     return 0;
 }
 
@@ -135,6 +156,10 @@ static int decode_frame(Track *t)
     if (sceMp3CheckStreamDataNeeded(t->handle) > 0 && feed(t) < 0) return 0;
     SceShort16 *pcm;
     int bytes = sceMp3Decode(t->handle, &pcm);
+    // After a seek the first frames can lean on data before the cut and fail
+    // to decode: skip those rather than ending the song.
+    if (bytes < 0 && t->offset && ++t->errors < 32) return 1;
+    if (bytes == 0 && t->offset && t->remaining == t->total && ++t->errors < 32) return 1;
     if (bytes <= 0) return 0;
     // The Media Engine writes the PCM straight to memory: drop any stale
     // cached copy before the CPU reads it.
@@ -183,7 +208,7 @@ static void extend_radio(void)
 static int decoder_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    Track t = { -1, -1, 0, 0, 0, 0 };
+    Track t = { -1, -1, 0, 0, 0, 0, 0, 0 };
     int open = 0;
     u32 start_ms = 0;
     for (;;) {
@@ -217,6 +242,8 @@ static int decoder_thread(SceSize args, void *argp)
                 continue;
             }
             int failed = open_track(&t, song, start_ms) < 0;
+            // A seek that can't open falls back to the start of the song.
+            if (failed && start_ms) failed = open_track(&t, song, 0) < 0;
             start_ms = 0;
             if (failed) {
                 take();
