@@ -11,6 +11,7 @@
 #include "settings.h"
 #include "stats.h"
 #include "ui.h"
+#include "vlib.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
 
@@ -106,12 +107,6 @@ void home_init(void)
     t_circle = button_glyph(2);
 }
 
-static void show_toast(const char *msg)
-{
-    snprintf(toast, sizeof(toast), "%s", msg);
-    toast_t = 2.2f;
-}
-
 int home_update(const Input *in, float dt)
 {
     t_now += dt;
@@ -126,7 +121,7 @@ int home_update(const Input *in, float dt)
     if (p & PSP_CTRL_CROSS) {
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
         if (sel == SEL_STATS) return library_state() == LIB_READY ? HOME_OPEN_STATS : HOME_STAY;
-        show_toast("Video arrives in milestone 5");
+        return HOME_OPEN_VIDEO;
     }
     if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
@@ -218,14 +213,22 @@ static void draw_tiles(void)
             gfx_tex(t_thumb, x + TILE_W - 14 - 58, y + 12, 58, 33, 0xFFFFFFFF);
         }
         font_draw(f_title, x + 14, y + TILE_H - 34, i == 0 ? "Music" : "Video", TEXT, 0);
-        char sub[64];
+        char sub[128];
         if (i == 0 && library_state() != LIB_READY)
             snprintf(sub, sizeof(sub), "Scanning\xE2\x80\xA6 %d songs", library_scan_count());
         else if (i == 0)
             snprintf(sub, sizeof(sub), "%s theme \xC2\xB7 Playlists \xC2\xB7 Radio", theme_names[settings.theme]);
+        else if (vlib_continue() >= 0)
+            snprintf(sub, sizeof(sub), "Continue: %s", videos[vlib_continue()].title);
         else
-            snprintf(sub, sizeof(sub), "Browse your videos");
-        font_draw(f_tiny, x + 14, y + TILE_H - 16, sub, SUBTLE, 0);
+            snprintf(sub, sizeof(sub), video_count == 1 ? "%d video" : "%d videos", video_count);
+        font_draw_fit(f_tiny, x + 14, y + TILE_H - 16, sub, SUBTLE, TILE_W - 28);
+        if (i == 1 && vlib_continue() >= 0) {
+            const Video *v = &videos[vlib_continue()];
+            float k = v->duration_ms ? fminf(1.0f, (float)v->resume_ms / v->duration_ms) : 0;
+            gfx_rect(x + 14, y + TILE_H - 9, TILE_W - 28, 2, RGBA(255, 255, 255, 30));
+            gfx_rect(x + 14, y + TILE_H - 9, (TILE_W - 28) * k, 2, ACCENT);
+        }
     }
 }
 
