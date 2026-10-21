@@ -31,13 +31,11 @@ enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
 
 static Font *f_logo, *f_title, *f_big, *f_mid, *f_small, *f_small_b, *f_tiny;
 static Texture *t_glow, *t_fill16, *t_ring16, *t_shadow16, *t_fill14, *t_ring14, *t_shadow14;
-static Texture *t_music, *t_video, *t_thumb, *t_art, *t_cross, *t_square, *t_circle;
+static Texture *t_music, *t_video, *t_thumb, *t_art;
 
 static int sel = SEL_MUSIC, last_tile = SEL_MUSIC;
 static float sel_k[SEL_COUNT] = { 1, 0, 0 };
 static float t_now;
-static char toast[64];
-static float toast_t;
 
 static Texture *icon_music(void)
 {
@@ -66,21 +64,6 @@ static Texture *icon_video(void)
     return t;
 }
 
-static Texture *button_glyph(int kind)
-{
-    Texture *t = tex_create(10, 10);
-    if (kind == 0) {
-        tex_stroke_line(t, 1.5f, 1.5f, 8.5f, 8.5f, 1.4f);
-        tex_stroke_line(t, 8.5f, 1.5f, 1.5f, 8.5f, 1.4f);
-    } else if (kind == 1) {
-        tex_stroke_round_rect(t, 1.5f, 1.5f, 7, 7, 0.5f, 1.3f);
-    } else {
-        tex_stroke_circle(t, 5, 5, 3.8f, 1.3f);
-    }
-    tex_upload(t);
-    return t;
-}
-
 void home_init(void)
 {
     f_logo = ui_font(FAMILY_SORA, 800, 16);
@@ -102,15 +85,11 @@ void home_init(void)
     t_video = icon_video();
     t_thumb = tex_round_gradient(58, 33, 6, HEX(0x2B3A67, 255), HEX(0xC46A8A, 255));
     t_art = tex_round_gradient(16, 16, 3, HEX(0x234E70, 255), HEX(0x57A0D3, 255));
-    t_cross = button_glyph(0);
-    t_square = button_glyph(1);
-    t_circle = button_glyph(2);
 }
 
 int home_update(const Input *in, float dt)
 {
     t_now += dt;
-    if (toast_t > 0) toast_t -= dt;
 
     u32 p = in->pressed;
     if (p & PSP_CTRL_LEFT && sel == SEL_VIDEO) sel = SEL_MUSIC;
@@ -283,29 +262,12 @@ static void draw_footer(void)
         font_draw(f_tiny, PAD + 24, y + 12, "Nothing playing", MUTED, 0);
     }
 
-    static const char *labels[3] = { "Open", "START Settings", "Exit" };
-    Texture *glyphs[3] = { t_cross, NULL, t_circle };
-    float x = SCREEN_W - PAD;
-    for (int i = 2; i >= 0; i--) {
-        x -= font_width(f_tiny, labels[i], 0);
-        font_draw(f_tiny, x, y + 12, labels[i], MUTED, 0);
-        if (glyphs[i]) {
-            x -= 13;
-            gfx_tex(glyphs[i], x, y + 3, 10, 10, MUTED);
-        }
-        x -= 8;
-    }
-}
-
-static void draw_toast(void)
-{
-    if (toast_t <= 0) return;
-    float a = fminf(1.0f, toast_t / 0.3f) * fminf(1.0f, (2.2f - toast_t) / 0.15f);
-    float w = font_width(f_small, toast, 0) + 28, h = 26;
-    float x = (SCREEN_W - w) / 2, y = STATS_Y + STATS_H + 6 - 8 * (1 - a);
-    gfx_nine(t_fill14, 14, x, y, w, h, HEX(0x1A1C24, (int)(235 * a)));
-    gfx_nine(t_ring14, 14, x, y, w, h, color_alpha(ACCENT, 0.7f * a));
-    font_draw(f_small, x + 14, y + 17, toast, color_alpha(TEXT, a), 0);
+    float x = SCREEN_W - PAD - ui_hint_width(f_tiny, ICON_CIRCLE, "Exit");
+    ui_hint(f_tiny, x, y + 12, ICON_CIRCLE, "Exit", MUTED);
+    x -= 8 + font_width(f_tiny, "START Settings", 0);
+    font_draw(f_tiny, x, y + 12, "START Settings", MUTED, 0);
+    x -= 8 + ui_hint_width(f_tiny, ICON_CROSS, "Open");
+    ui_hint(f_tiny, x, y + 12, ICON_CROSS, "Open", MUTED);
 }
 
 void home_draw(void)
@@ -316,7 +278,6 @@ void home_draw(void)
     draw_tiles();
     draw_stats();
     draw_footer();
-    draw_toast();
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }

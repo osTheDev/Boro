@@ -23,6 +23,12 @@ void ui_battery(Font *f, float right, float cy, u32 color);
 // Hint text like "✕ Play": draws the button glyph then the label. Returns end x.
 float ui_hint(Font *f, float x, float baseline, int glyph, const char *label, u32 color);
 float ui_hint_width(Font *f, int glyph, const char *label);
+// Tiny d-pad triangles (the fonts have none), 4x7 pixels.
+enum { UI_RIGHT, UI_LEFT, UI_UP, UI_DOWN };
+void ui_triangle(float x, float y, int dir, u32 color);
+// Hint text like "◀▶ Seek" (or "▲▼" when vertical). Returns end x.
+float ui_hint_arrows(Font *f, float x, float baseline, int vertical, const char *label, u32 color);
+float ui_hint_arrows_width(Font *f, const char *label);
 // Placeholder art: a two-color diagonal gradient picked from a seed.
 void ui_placeholder_art(float x, float y, float size, float r, int seed);
 void ui_placeholder_colors(int seed, u32 *c0, u32 *c1);

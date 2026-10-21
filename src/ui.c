@@ -226,6 +226,29 @@ float ui_hint(Font *f, float x, float baseline, int glyph, const char *label, u3
     return font_draw(f, x + size + 3, baseline, label, color, 0);
 }
 
+void ui_triangle(float x, float y, int dir, u32 c)
+{
+    for (int i = 0; i < 4; i++) {
+        float len = 7 - i * 2;
+        if (dir == UI_RIGHT) gfx_rect(x + i, y + i, 1, len, c);
+        else if (dir == UI_LEFT) gfx_rect(x + 3 - i, y + i, 1, len, c);
+        else if (dir == UI_UP) gfx_rect(x + i, y + 3 - i, len, 1, c);
+        else gfx_rect(x + i, y + i, len, 1, c);
+    }
+}
+
+float ui_hint_arrows(Font *f, float x, float baseline, int vertical, const char *label, u32 c)
+{
+    if (vertical) { ui_triangle(x, baseline - 7, UI_UP, c); ui_triangle(x + 9, baseline - 6, UI_DOWN, c); }
+    else { ui_triangle(x, baseline - 8, UI_LEFT, c); ui_triangle(x + 6, baseline - 8, UI_RIGHT, c); }
+    return font_draw(f, x + 19, baseline, label, c, 0);
+}
+
+float ui_hint_arrows_width(Font *f, const char *label)
+{
+    return 19 + font_width(f, label, 0);
+}
+
 static const u32 placeholder[][2] = {
     { 0xD4513B, 0xF2B84B }, { 0x234E70, 0x57A0D3 }, { 0x3E2A5C, 0xA06CD5 }, { 0x1E4D2B, 0x7BC47F },
     { 0x5C3A21, 0xE0A060 }, { 0x2D2D2D, 0x8C8C8C }, { 0x6B1F3A, 0xE05C8A }, { 0x1B3B4F, 0x4FB3BF },
