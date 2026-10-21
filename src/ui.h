@@ -15,6 +15,8 @@ void ui_init(void);
 Font *ui_font(int family, int weight, int px);
 
 void ui_rrect(float x, float y, float w, float h, float r, u32 color);
+// Rounds off a picture's corners by drawing over them in the background color.
+void ui_round_corners(float x, float y, float w, float h, int r, u32 bg);
 void ui_ring(float x, float y, float w, float h, float r, u32 color); // 1px outline
 void ui_shadow(float x, float y, float w, float h, float r, float blur, u32 color);
 void ui_icon(int icon, float x, float y, float size, u32 color);

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <strings.h>
 #include "gfx.h"
+#include "photos.h"
 #include "player.h"
 #include "settings.h"
 #include "ui.h"
@@ -37,7 +38,7 @@ static const char *const tab_names[TAB_COUNT] = { "All", "Movies", "Music", "Cli
 static const char *const cat_names[VCAT_COUNT] = { "Videos", "Movies", "Music video", "Clips", "Shows" };
 
 static Font *f_tab, *f_tab_b, *f_title, *f_small, *f_small_b, *f_tiny, *f_chip, *f_time;
-static Texture *t_corner[4], *t_fill12, *t_dot;
+static Texture *t_fill12, *t_dot;
 static int inited;
 
 // Browser
@@ -52,31 +53,6 @@ static int gain = 100;
 static int seeking; // -1 / 1 while the d-pad is held
 static float seek_ms, seek_speed;
 
-// Alpha masks that round off a corner, drawn in the background color.
-static Texture *corner_mask(int which, int r)
-{
-    Texture *t = tex_create_alpha8(r, r);
-    u8 *px = (u8 *)t->px;
-    for (int y = 0; y < r; y++)
-        for (int x = 0; x < r; x++) {
-            float fx = which & 1 ? x + 0.5f : r - x - 0.5f, fy = which & 2 ? y + 0.5f : r - y - 0.5f;
-            float d = sqrtf(fx * fx + fy * fy) - r;
-            float a = d < -0.5f ? 0 : d > 0.5f ? 1 : d + 0.5f;
-            px[y * t->tw + x] = (u8)(a * 255);
-        }
-    tex_upload(t);
-    return t;
-}
-
-static void round_corners(float x, float y, float w, float h, int r, u32 bg)
-{
-    gfx_filter(1);
-    gfx_tex(t_corner[0], x, y, r, r, bg);
-    gfx_tex(t_corner[1], x + w - r, y, r, r, bg);
-    gfx_tex(t_corner[2], x, y + h - r, r, r, bg);
-    gfx_tex(t_corner[3], x + w - r, y + h - r, r, r, bg);
-}
-
 static void init(void)
 {
     inited = 1;
@@ -89,7 +65,6 @@ static void init(void)
     f_chip = ui_font(FAMILY_SORA, 400, 9);
     f_time = ui_font(FAMILY_SORA, 400, 10);
     // 16 texels: narrower 8-bit textures misalign on the GE. Drawn scaled down.
-    for (int i = 0; i < 4; i++) t_corner[i] = corner_mask(i, 16);
     t_fill12 = tex_round_fill(12);
     t_dot = tex_round_fill(18);
 }
@@ -132,6 +107,7 @@ void video_enter(void)
     vlib_scan();
     build_list(0);
     vlib_thumbs(1);
+    if (tab == TAB_PHOTOS) photos_enter();
 }
 
 int video_playing(void) { return playing >= 0; }
@@ -165,12 +141,25 @@ static void stop(int finished)
 static int browser_update(const Input *in)
 {
     u32 p = in->pressed, nav = in->nav;
+    int was = tab;
+    if (p & PSP_CTRL_LTRIGGER) tab = (tab + TAB_COUNT - 1) % TAB_COUNT;
+    if (p & PSP_CTRL_RTRIGGER) tab = (tab + 1) % TAB_COUNT;
+    if (tab != was) {
+        build_list(0);
+        if (was == TAB_PHOTOS) photos_leave();
+        if (tab == TAB_PHOTOS) photos_enter();
+        return 0;
+    }
+    if (tab == TAB_PHOTOS) {
+        if (!photos_update(in)) return 0;
+        photos_leave();
+        vlib_thumbs(0);
+        return 1;
+    }
     if (p & PSP_CTRL_CIRCLE) {
         vlib_thumbs(0);
         return 1;
     }
-    if (p & PSP_CTRL_LTRIGGER) { tab = (tab + TAB_COUNT - 1) % TAB_COUNT; build_list(0); }
-    if (p & PSP_CTRL_RTRIGGER) { tab = (tab + 1) % TAB_COUNT; build_list(0); }
     if (p & PSP_CTRL_SQUARE) { sort_az = !sort_az; build_list(1); }
     if (!list_count) return 0;
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
@@ -224,7 +213,7 @@ static void draw_top_bar(void)
     float right = SCREEN_W - 14;
     ui_battery(f_small, right, base - 4, MUTED);
     const char *sort = sort_az ? "Sorted A\xE2\x80\x93Z" : "Sorted by recent";
-    font_draw_right(f_small, right - 62, base, sort, DIM);
+    if (tab != TAB_PHOTOS) font_draw_right(f_small, right - 62, base, sort, DIM);
 }
 
 static void draw_hero(void)
@@ -238,7 +227,7 @@ static void draw_hero(void)
         gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W, 4, RGBA(255, 255, 255, 51));
         gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W * (float)resume_of(v) / v->duration_ms, 4, ACCENT);
     }
-    round_corners(HERO_X, HERO_Y, HERO_W, HERO_H, 8, BG);
+    ui_round_corners(HERO_X, HERO_Y, HERO_W, HERO_H, 8, BG);
     char buf[64];
     if (v->duration_ms) {
         ui_format_time(buf, sizeof(buf), v->duration_ms);
@@ -306,7 +295,7 @@ static void draw_row(float dt)
             gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W, 3, RGBA(255, 255, 255, 51));
             gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W * (float)resume_of(v) / v->duration_ms, 3, ACCENT);
         }
-        round_corners(x, ROW_Y, TILE_W, TILE_H, 6, BG);
+        ui_round_corners(x, ROW_Y, TILE_W, TILE_H, 6, BG);
         font_draw_fit(f_tiny, x, ROW_Y + TILE_H + 13, v->title, i == sel ? TEXT : MUTED, TILE_W);
     }
     gfx_unclip();
@@ -326,15 +315,12 @@ static void browser_draw(float dt)
 {
     gfx_begin(BG);
     draw_top_bar();
-    if (!list_count) {
+    if (tab == TAB_PHOTOS) {
+        photos_draw(dt);
+    } else if (!list_count) {
         const char *a = video_count ? "Nothing in this tab" : "No videos yet";
         const char *b = "Put MP4s in VIDEO on your memory stick,";
         const char *c = "in Movies, Music, Clips or Shows folders.";
-        if (tab == TAB_PHOTOS) {
-            a = "Photos are on the way";
-            b = "Photos from PICTURE on your memory stick";
-            c = "will show up here in the next build.";
-        }
         font_draw_center(f_title, SCREEN_W / 2, 120, a, TEXT);
         font_draw_center(f_small, SCREEN_W / 2, 142, b, MUTED);
         font_draw_center(f_small, SCREEN_W / 2, 156, c, MUTED);
