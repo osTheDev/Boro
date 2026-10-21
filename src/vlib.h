@@ -1,5 +1,5 @@
-// Video library: MP4s under VIDEO (Movies, Shows and Clips folders become
-// tabs), thumbnails made in the background and cached in data/thumbs, and
+// Video library: MP4s under VIDEO (Movies, Music and Clips folders become
+// tabs; Shows only appear under All), thumbnails made in the background and cached in data/thumbs, and
 // where each video was stopped, kept in data/video.txt.
 #ifndef BORO_VLIB_H
 #define BORO_VLIB_H
@@ -7,7 +7,7 @@
 #include <psptypes.h>
 #include "gfx.h"
 
-enum { VCAT_OTHER, VCAT_MOVIES, VCAT_SHOWS, VCAT_CLIPS, VCAT_COUNT };
+enum { VCAT_OTHER, VCAT_MOVIES, VCAT_MUSIC, VCAT_CLIPS, VCAT_SHOWS, VCAT_COUNT };
 
 typedef struct {
     char path[256];

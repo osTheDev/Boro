@@ -125,6 +125,7 @@ static void make_title(char *out, int size, const char *name)
 static int category_of(const char *top)
 {
     if (!strcasecmp(top, "Movies")) return VCAT_MOVIES;
+    if (!strcasecmp(top, "Music")) return VCAT_MUSIC;
     if (!strcasecmp(top, "Shows")) return VCAT_SHOWS;
     if (!strcasecmp(top, "Clips")) return VCAT_CLIPS;
     return VCAT_OTHER;

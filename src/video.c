@@ -31,8 +31,10 @@
 #define TILE_H 54
 #define TILE_GAP 10
 
-static const char *const tab_names[] = { "All", "Movies", "Shows", "Clips" };
-static const char *const cat_names[] = { "Videos", "Movies", "Shows", "Clips" };
+// Tabs 1..3 match the VCAT_ values of their folders; Shows has no tab.
+enum { TAB_ALL, TAB_PHOTOS = 4, TAB_COUNT };
+static const char *const tab_names[TAB_COUNT] = { "All", "Movies", "Music", "Clips", "Photos" };
+static const char *const cat_names[VCAT_COUNT] = { "Videos", "Movies", "Music video", "Clips", "Shows" };
 
 static Font *f_tab, *f_tab_b, *f_title, *f_small, *f_small_b, *f_tiny, *f_chip, *f_time;
 static Texture *t_corner[4], *t_fill12, *t_dot;
@@ -116,7 +118,7 @@ static void build_list(int keep)
     int was = list_count && sel < list_count ? list[sel] : -1;
     list_count = 0;
     for (int i = 0; i < video_count && list_count < (int)(sizeof(list) / sizeof(list[0])); i++)
-        if (tab == 0 || videos[i].category == tab) list[list_count++] = i;
+        if (tab == TAB_ALL || (tab != TAB_PHOTOS && videos[i].category == tab)) list[list_count++] = i;
     qsort(list, list_count, sizeof(int), sort_az ? cmp_az : cmp_recent);
     sel = 0;
     if (keep)
@@ -167,8 +169,8 @@ static int browser_update(const Input *in)
         vlib_thumbs(0);
         return 1;
     }
-    if (p & PSP_CTRL_LTRIGGER) { tab = (tab + 3) % 4; build_list(0); }
-    if (p & PSP_CTRL_RTRIGGER) { tab = (tab + 1) % 4; build_list(0); }
+    if (p & PSP_CTRL_LTRIGGER) { tab = (tab + TAB_COUNT - 1) % TAB_COUNT; build_list(0); }
+    if (p & PSP_CTRL_RTRIGGER) { tab = (tab + 1) % TAB_COUNT; build_list(0); }
     if (p & PSP_CTRL_SQUARE) { sort_az = !sort_az; build_list(1); }
     if (!list_count) return 0;
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
@@ -208,7 +210,7 @@ static void draw_top_bar(void)
     ui_ring(x, base - 9, chip_w, 11, 3, CHIP);
     font_draw(f_chip, x + 4, base - 1, "L", HEX(0x6E7180, 255), 0);
     x += chip_w + 14;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < TAB_COUNT; i++) {
         Font *f = i == tab ? f_tab_b : f_tab;
         float w = font_width(f, tab_names[i], 0);
         font_draw(f, x, base, tab_names[i], i == tab ? TEXT : DIM, 0);
@@ -327,7 +329,12 @@ static void browser_draw(float dt)
     if (!list_count) {
         const char *a = video_count ? "Nothing in this tab" : "No videos yet";
         const char *b = "Put MP4s in VIDEO on your memory stick,";
-        const char *c = "in Movies, Shows or Clips folders.";
+        const char *c = "in Movies, Music, Clips or Shows folders.";
+        if (tab == TAB_PHOTOS) {
+            a = "Photos are on the way";
+            b = "Photos from PICTURE on your memory stick";
+            c = "will show up here in the next build.";
+        }
         font_draw_center(f_title, SCREEN_W / 2, 120, a, TEXT);
         font_draw_center(f_small, SCREEN_W / 2, 142, b, MUTED);
         font_draw_center(f_small, SCREEN_W / 2, 156, c, MUTED);
