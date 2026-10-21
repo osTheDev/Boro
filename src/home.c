@@ -31,11 +31,16 @@ enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
 
 static Font *f_logo, *f_title, *f_big, *f_mid, *f_small, *f_small_b, *f_tiny;
 static Texture *t_glow, *t_fill16, *t_ring16, *t_shadow16, *t_fill14, *t_ring14, *t_shadow14;
-static Texture *t_music, *t_video, *t_thumb, *t_art;
+static Texture *t_music, *t_video, *t_thumb, *t_art, *t_fill8, *t_ring8;
+static Font *f_quit, *f_note, *f_button;
 
 static int sel = SEL_MUSIC, last_tile = SEL_MUSIC;
 static float sel_k[SEL_COUNT] = { 1, 0, 0 };
 static float t_now;
+
+// "Quit Boro?" prompt: Stay is picked first, so a double tap of ○ never quits.
+static int quit_open, quit_sel;
+static float quit_k;
 
 static Texture *icon_music(void)
 {
@@ -85,13 +90,33 @@ void home_init(void)
     t_video = icon_video();
     t_thumb = tex_round_gradient(58, 33, 6, HEX(0x2B3A67, 255), HEX(0xC46A8A, 255));
     t_art = tex_round_gradient(16, 16, 3, HEX(0x234E70, 255), HEX(0x57A0D3, 255));
+    t_fill8 = tex_round_fill(8);
+    t_ring8 = tex_round_ring(8, 1);
+    f_quit = ui_font(FAMILY_SORA, 700, 17);
+    f_note = ui_font(FAMILY_MANROPE, 500, 11);
+    f_button = ui_font(FAMILY_SORA, 700, 12);
+}
+
+static void quit_update(u32 p)
+{
+    if (p & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) quit_sel ^= 1;
+    if (p & PSP_CTRL_CIRCLE) quit_open = 0;
+    if (p & PSP_CTRL_CROSS) {
+        if (quit_sel) sys_quit();
+        quit_open = 0;
+    }
 }
 
 int home_update(const Input *in, float dt)
 {
     t_now += dt;
+    quit_k += ((quit_open ? 1.0f : 0.0f) - quit_k) * fminf(1.0f, dt * 14.0f);
 
     u32 p = in->pressed;
+    if (quit_open) {
+        quit_update(p);
+        return HOME_STAY;
+    }
     if (p & PSP_CTRL_LEFT && sel == SEL_VIDEO) sel = SEL_MUSIC;
     if (p & PSP_CTRL_RIGHT && sel == SEL_MUSIC) sel = SEL_VIDEO;
     if (p & PSP_CTRL_DOWN && sel != SEL_STATS) { last_tile = sel; sel = SEL_STATS; }
@@ -104,7 +129,7 @@ int home_update(const Input *in, float dt)
     }
     if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
-    if (p & PSP_CTRL_CIRCLE) sys_quit();
+    if (p & PSP_CTRL_CIRCLE) { quit_open = 1; quit_sel = 0; }
 
     for (int i = 0; i < SEL_COUNT; i++) {
         float target = i == sel ? 1.0f : 0.0f;
@@ -262,12 +287,46 @@ static void draw_footer(void)
         font_draw(f_tiny, PAD + 24, y + 12, "Nothing playing", MUTED, 0);
     }
 
+    if (quit_open) return; // the prompt draws its own hints
     float x = SCREEN_W - PAD - ui_hint_width(f_tiny, ICON_CIRCLE, "Exit");
     ui_hint(f_tiny, x, y + 12, ICON_CIRCLE, "Exit", MUTED);
     x -= 8 + font_width(f_tiny, "START Settings", 0);
     font_draw(f_tiny, x, y + 12, "START Settings", MUTED, 0);
     x -= 8 + ui_hint_width(f_tiny, ICON_CROSS, "Open");
     ui_hint(f_tiny, x, y + 12, ICON_CROSS, "Open", MUTED);
+}
+
+static void draw_quit(void)
+{
+    float k = quit_k;
+    if (k < 0.01f) return;
+    gfx_rect(0, 0, SCREEN_W, SCREEN_H, RGBA(5, 6, 9, (int)(205 * k)));
+
+    const float x = 130, y = 70, w = 220, h = 126;
+    gfx_nine(t_shadow16, 34, x - 18, y - 18, w + 36, h + 36, color_alpha(ACCENT, 0.3f * k));
+    gfx_nine(t_fill14, 14, x, y, w, h, RGBA(28, 30, 40, (int)(240 * k)));
+    gfx_nine(t_ring14, 14, x, y, w, h, color_alpha(HEX(0x6C8CFF, 150), k));
+    font_draw_center(f_quit, x + w / 2, y + 31, "Quit Boro?", color_alpha(TEXT, k));
+    const char *note = player_song() >= 0 && !player_paused() ? "Music will stop playing." : "You'll go back to the PSP menu.";
+    font_draw_center(f_note, x + w / 2, y + 54, note, color_alpha(MUTED, k));
+
+    static const char *labels[] = { "Stay", "Quit" };
+    for (int i = 0; i < 2; i++) {
+        float bx = x + 16 + i * 100, by = y + h - 44;
+        if (i == quit_sel) {
+            gfx_nine(t_fill8, 8, bx, by, 88, 28, color_alpha(ACCENT, k));
+        } else {
+            gfx_nine(t_fill8, 8, bx, by, 88, 28, RGBA(255, 255, 255, (int)(18 * k)));
+            gfx_nine(t_ring8, 8, bx, by, 88, 28, RGBA(255, 255, 255, (int)(40 * k)));
+        }
+        font_draw_center(f_button, bx + 44, by + 18, labels[i], color_alpha(i == quit_sel ? TEXT : MUTED, k));
+    }
+
+    float hy = SCREEN_H - 8 - 4;
+    float hx = SCREEN_W - PAD - ui_hint_width(f_tiny, ICON_CIRCLE, "Cancel");
+    ui_hint(f_tiny, hx, hy, ICON_CIRCLE, "Cancel", color_alpha(MUTED, k));
+    hx -= 8 + ui_hint_width(f_tiny, ICON_CROSS, "Select");
+    ui_hint(f_tiny, hx, hy, ICON_CROSS, "Select", color_alpha(MUTED, k));
 }
 
 void home_draw(void)
@@ -278,6 +337,7 @@ void home_draw(void)
     draw_tiles();
     draw_stats();
     draw_footer();
+    draw_quit();
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }
