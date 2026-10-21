@@ -135,6 +135,7 @@ static void read_thumb_head(Photo *p)
 void plib_scan(void)
 {
     plib_thumbs(0);
+    plib_thumbs_wait();
     for (int i = 0; i < LOADED; i++) loaded[i].index = -1;
     photo_count = palbum_count = 0;
     walk(picture_dir, 0);
@@ -247,13 +248,13 @@ static int worker_thread(SceSize args, void *argp)
     return 0;
 }
 
-void plib_thumbs(int on)
+void plib_thumbs(int on) { thumbs_on = on; }
+
+void plib_thumbs_wait(void)
 {
-    thumbs_on = on;
-    if (!on && busy >= 0) {
-        sceKernelWaitSema(busy, 1, NULL);
-        sceKernelSignalSema(busy, 1);
-    }
+    if (busy < 0) return;
+    sceKernelWaitSema(busy, 1, NULL);
+    sceKernelSignalSema(busy, 1);
 }
 
 void plib_want(int index)

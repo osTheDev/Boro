@@ -3,6 +3,7 @@
 #include <psppower.h>
 #include <psprtc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "art.h"
 #include "flac.h"
@@ -58,6 +59,16 @@ static void music_draw(float dt)
 
 int main(int argc, char *argv[])
 {
+#ifdef BORO_SCRIPT
+    // The emulator has more memory than a PSP-3000; hold the extra back so
+    // test runs run out where a real one would.
+    {
+        u32 lo = 0, hi = 128u << 20;
+        while (hi - lo > (64 << 10)) { u32 m = (lo + hi) / 2; void *volatile b = malloc(m); if (b) { free(b); lo = m; } else hi = m; }
+        static void *volatile ballast;
+        if (lo > (46u << 20)) ballast = malloc(lo - (46u << 20));
+    }
+#endif
     // argv[0] is like "ms0:/PSP/GAME/Boro/EBOOT.PBP": keep data next to the
     // EBOOT and read music from MUSIC on the same device.
     char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC", video_dir[64] = "ms0:/VIDEO", picture_dir[64] = "ms0:/PICTURE";

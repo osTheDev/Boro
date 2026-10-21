@@ -29,7 +29,7 @@ static char context[64];
 
 // The photo on screen, cut into textures the GU can take.
 static Texture *tiles[MAX_TILES];
-static int tile_count, img_w, img_h, state; // state: 0 loading, 1 shown, -1 failed
+static int tile_count, img_w, img_h, state; // state: 0 loading, 1 shown, -1 broken, -2 too big
 
 static int zoom_step;      // 0, 1, 2: 1x, 2x, 4x
 static float zoom = 1;     // drawn zoom, eases toward the step
@@ -70,9 +70,10 @@ static int worker(SceSize args, void *argp)
         sceKernelWaitSema(wake, 1, NULL);
         int idx = want;
         if (idx < 0) continue;
+        plib_thumbs_wait(); // one big decode at a time; waiting here keeps the screen moving
         int w = 0, h = 0;
         u8 *rgba = image_load(photos[idx].path, DETAIL, &w, &h);
-        if (rgba) rgba = fit_side(rgba, &w, &h);
+        if (rgba && !(rgba = fit_side(rgba, &w, &h))) w = -1;
         if (want != idx) { free(rgba); continue; } // flipped past it meanwhile
         while (done_idx >= 0) sceKernelDelayThread(5000); // the last one hasn't been taken
         done_rgba = rgba;
@@ -91,7 +92,8 @@ static void free_tiles(void)
 
 static int tiles_across(void) { return (img_w + TILE - 1) / TILE; }
 
-static void make_tiles(const u8 *rgba)
+// Returns 0 when memory ran out partway.
+static int make_tiles(const u8 *rgba)
 {
     int across = tiles_across(), down = (img_h + TILE - 1) / TILE;
     for (int ty = 0; ty < down; ty++)
@@ -99,11 +101,13 @@ static void make_tiles(const u8 *rgba)
             int x0 = tx * TILE, y0 = ty * TILE;
             int w = img_w - x0 < TILE ? img_w - x0 : TILE, h = img_h - y0 < TILE ? img_h - y0 : TILE;
             Texture *t = tex_create(w, h);
+            if (!t) { free_tiles(); return 0; }
             for (int y = 0; y < h; y++)
                 memcpy(t->px + y * t->tw, rgba + ((y0 + y) * img_w + x0) * 4, w * 4);
             tex_upload(t);
             tiles[tile_count++] = t;
         }
+    return 1;
 }
 
 static void show(int index)
@@ -159,13 +163,14 @@ static void take_decoded(void)
     if (done_idx == run_first + cur && state == 0) {
         img_w = done_w;
         img_h = done_h;
-        if (done_rgba) {
-            make_tiles(done_rgba);
+        if (!done_rgba) {
+            state = done_w < 0 ? -2 : -1;
+        } else if (make_tiles(done_rgba)) {
             state = 1;
             view_x = img_w / 2.0f;
             view_y = img_h / 2.0f;
         } else {
-            state = -1;
+            state = -2;
         }
     }
     free(done_rgba);
@@ -296,7 +301,8 @@ void pviewer_draw(void)
         float s = fit_scale() * zoom;
         draw_photo(SCREEN_W / 2 - view_x * s, SCREEN_H / 2 - view_y * s, s);
     } else {
-        const char *msg = state ? "This photo can't be opened" : "Loading\xE2\x80\xA6";
+        const char *msg = state == -2 ? "This photo is too big to open on the PSP"
+                        : state ? "This photo can't be opened" : "Loading\xE2\x80\xA6";
         font_draw_center(f_small, SCREEN_W / 2, SCREEN_H / 2 + 4, msg, MUTED);
         bars_t = BARS_SECONDS; // keep the name up while there's nothing else
     }

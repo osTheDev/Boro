@@ -6,7 +6,8 @@
 
 // JPEGs are scaled down while decoding, keeping the shorter side at least
 // `want` pixels (0 keeps full size). PNGs always decode at full size. Pictures
-// too big to fit in memory return NULL.
+// too big to fit in memory return NULL with *w set to -1; broken ones return
+// NULL with *w set to 0.
 u8 *image_decode(const u8 *data, u32 size, int want, int *w, int *h);
 
 // Same, straight from a file, turned upright when a JPEG's EXIF says so.
