@@ -5,8 +5,10 @@
 #include <pspiofilemgr.h>
 #include <stdio.h>
 #include <string.h>
+#include "about.h"
 #include "player.h"
 #include "ui.h"
+#include "version.h"
 
 Settings settings = { THEME_FLAC, DECK_AMBER, 1, 1, 1, DELAY_1M, 0, 1 };
 const char *const theme_names[THEME_COUNT] = { "FL/AC", "iPod", "Head unit" };
@@ -99,21 +101,21 @@ void settings_frame(float dt)
 #define ACCENT HEX(0x6C8CFF, 255)
 #define TRACK HEX(0x3A3D48, 255)
 
-enum { ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_SLEEP, ROW_COUNT };
+enum { ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_SLEEP, ROW_ABOUT, ROW_COUNT };
 static const char *const labels[ROW_COUNT] = {
     "Keep screen on", "Idle visualizer", "Visualizer starts after", "Visualizer style",
-    "Music theme", "Head unit color", "Resume videos", "Sleep timer",
+    "Music theme", "Head unit color", "Resume videos", "Sleep timer", "About Boro",
 };
 static const char *const helps[ROW_COUNT] = {
     "Screen stays lit while music plays. Off saves battery.", "Kicks in when no buttons are pressed", NULL, NULL,
-    NULL, NULL, "Pick up where you stopped", "Fades the music out, then pauses it",
+    NULL, NULL, "Pick up where you stopped", "Fades the music out, then pauses it", NULL,
 };
 
 #define ROW_Y 36
 #define ROW_H 28
 #define ROWS_SHOWN 7
 
-static int sel, top;
+static int sel, top, in_about;
 static float knob[ROW_COUNT];
 
 static Font *S(int weight, int px) { return ui_font(FAMILY_SORA, weight, px); }
@@ -130,7 +132,7 @@ static int *toggle_of(int row)
 
 void settings_enter(void)
 {
-    sel = top = 0;
+    sel = top = in_about = 0;
     for (int i = 0; i < ROW_COUNT; i++) knob[i] = toggle_of(i) ? *toggle_of(i) : 0;
 }
 
@@ -160,6 +162,14 @@ static void change(int dir)
 int settings_update(const Input *in, float dt)
 {
     u32 n = in->nav, p = in->pressed;
+    if (in_about) {
+        if (p & PSP_CTRL_CIRCLE) in_about = 0;
+        return 0;
+    }
+    if (sel == ROW_ABOUT && p & PSP_CTRL_CROSS) {
+        in_about = 1;
+        return 0;
+    }
     if (n & PSP_CTRL_UP) sel = clampi(sel - 1, 0, ROW_COUNT - 1);
     if (n & PSP_CTRL_DOWN) sel = clampi(sel + 1, 0, ROW_COUNT - 1);
     if (sel < top) top = sel;
@@ -179,6 +189,7 @@ static void value_of(int row, char *out, int size)
     case ROW_STYLE: snprintf(out, size, "%s", vis_names[settings.vis_style]); break;
     case ROW_THEME: snprintf(out, size, "%s", theme_names[settings.theme]); break;
     case ROW_DECK_COLOR: snprintf(out, size, "%s", deck_color_names[settings.deck_color]); break;
+    case ROW_ABOUT: snprintf(out, size, "v%s", BORO_VERSION); break;
     case ROW_SLEEP:
         if (!sleep_choice) snprintf(out, size, "Off");
         else snprintf(out, size, "%d min left", (int)((sleep_left + 59) / 60));
@@ -189,6 +200,10 @@ static void value_of(int row, char *out, int size)
 
 void settings_draw(void)
 {
+    if (in_about) {
+        about_draw();
+        return;
+    }
     gfx_begin(BG);
     Font *title = S(700, 15), *label = S(700, 12), *help = S(400, 9), *small = S(400, 10), *fv = S(700, 11);
     // Gear: a ring with eight teeth.
@@ -228,7 +243,7 @@ void settings_draw(void)
             float tw = font_width(fv, value, 0);
             ui_triangle(right - 4, y + 11, UI_RIGHT, ACCENT);
             font_draw(fv, right - 10 - tw, y + 18, value, ACCENT, 0);
-            ui_triangle(right - 20 - tw, y + 11, UI_LEFT, ACCENT);
+            if (i != ROW_ABOUT) ui_triangle(right - 20 - tw, y + 11, UI_LEFT, ACCENT); // opens, doesn't cycle
         }
     }
     // Scroll hint when rows are hidden.

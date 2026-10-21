@@ -54,11 +54,13 @@ static int rows_of(const Texture *t)
 Texture *tex_create(int w, int h)
 {
     Texture *t = calloc(1, sizeof(Texture));
+    if (!t) return NULL;
     t->w = w;
     t->h = h;
     t->tw = pow2(w);
     t->th = pow2(h);
     t->px = memalign(16, t->tw * rows_of(t) * 4);
+    if (!t->px) { free(t); return NULL; }
     memset(t->px, 0, t->tw * rows_of(t) * 4);
     return t;
 }

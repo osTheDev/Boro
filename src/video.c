@@ -322,13 +322,15 @@ static void browser_draw(float dt)
     draw_top_bar();
     if (tab == TAB_PHOTOS) {
         photos_draw(dt);
+    } else if (!video_count) {
+        ui_empty_card(150, "No videos yet", "MP4 videos into", vlib_dir(), "Movies, Music, Clips and Shows folders become tabs.");
+        int g[] = { ICON_CIRCLE };
+        const char *l[] = { "Back" };
+        draw_hints(g, l, 1, SCREEN_W - 14, SCREEN_H - 8, MUTED);
     } else if (!list_count) {
-        const char *a = video_count ? "Nothing in this tab" : "No videos yet";
-        const char *b = "Put MP4s in VIDEO on your memory stick,";
-        const char *c = "in Movies, Music, Clips or Shows folders.";
-        font_draw_center(f_title, SCREEN_W / 2, 120, a, TEXT);
-        font_draw_center(f_small, SCREEN_W / 2, 142, b, MUTED);
-        font_draw_center(f_small, SCREEN_W / 2, 156, c, MUTED);
+        font_draw_center(f_title, SCREEN_W / 2, 120, "Nothing in this tab", TEXT);
+        const char *c = tab == VCAT_MUSIC ? "Music videos go in VIDEO/Music." : tab == VCAT_MOVIES ? "Movies go in VIDEO/Movies." : "Clips go in VIDEO/Clips.";
+        font_draw_center(f_small, SCREEN_W / 2, 142, c, MUTED);
         int g[] = { ICON_CIRCLE };
         const char *l[] = { "Back" };
         draw_hints(g, l, 1, SCREEN_W - 14, SCREEN_H - 8, MUTED);
@@ -340,6 +342,7 @@ static void browser_draw(float dt)
         const char *l[] = { resume ? "Resume" : "Play", "Start over", "Sort", "Back" };
         draw_hints(g, l, 4, SCREEN_W - 14, SCREEN_H - 8, MUTED);
     }
+    ui_volume(f_small_b, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }
 

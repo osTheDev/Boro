@@ -135,6 +135,7 @@ static void read_thumb_head(Photo *p)
 void plib_scan(void)
 {
     plib_thumbs(0);
+    plib_thumbs_wait();
     for (int i = 0; i < LOADED; i++) loaded[i].index = -1;
     photo_count = palbum_count = 0;
     walk(picture_dir, 0);
@@ -247,13 +248,13 @@ static int worker_thread(SceSize args, void *argp)
     return 0;
 }
 
-void plib_thumbs(int on)
+void plib_thumbs(int on) { thumbs_on = on; }
+
+void plib_thumbs_wait(void)
 {
-    thumbs_on = on;
-    if (!on && busy >= 0) {
-        sceKernelWaitSema(busy, 1, NULL);
-        sceKernelSignalSema(busy, 1);
-    }
+    if (busy < 0) return;
+    sceKernelWaitSema(busy, 1, NULL);
+    sceKernelSignalSema(busy, 1);
 }
 
 void plib_want(int index)
@@ -280,11 +281,13 @@ const Texture *plib_thumb(int index)
     thumb_path(&photos[index], path, sizeof(path));
     SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (fd < 0) return NULL;
-    ThumbHead h;
-    int ok = sceIoRead(fd, &h, sizeof(h)) == sizeof(h) && h.has_pixels;
-    for (int y = 0; ok && y < PTHUMB_H; y++)
-        ok = sceIoRead(fd, l->tex->px + y * l->tex->tw, PTHUMB_W * 4) == PTHUMB_W * 4;
+    // One read for the whole file: the memory stick is slow at many small ones.
+    static struct { ThumbHead h; u32 px[PTHUMB_W * PTHUMB_H]; } file;
+    int got = sceIoRead(fd, &file, sizeof(file));
     sceIoClose(fd);
+    int ok = got == sizeof(file) && file.h.has_pixels;
+    for (int y = 0; ok && y < PTHUMB_H; y++)
+        memcpy(l->tex->px + y * l->tex->tw, file.px + y * PTHUMB_W, PTHUMB_W * 4);
     if (!ok) { photos[index].thumb = 0; return NULL; }
     round_alpha(l->tex, 5);
     tex_upload(l->tex);
@@ -292,6 +295,8 @@ const Texture *plib_thumb(int index)
     l->used = use_clock;
     return l->tex;
 }
+
+const char *plib_dir(void) { return picture_dir; }
 
 void plib_init(const char *data, const char *dir)
 {

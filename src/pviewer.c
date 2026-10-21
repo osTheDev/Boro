@@ -29,18 +29,27 @@ static char context[64];
 
 // The photo on screen, cut into textures the GU can take.
 static Texture *tiles[MAX_TILES];
-static int tile_count, img_w, img_h, state; // state: 0 loading, 1 shown, -1 failed
+static int tile_count, img_w, img_h, state; // state: 0 loading, 1 shown, -1 broken, -2 too big
 
 static int zoom_step;      // 0, 1, 2: 1x, 2x, 4x
 static float zoom = 1;     // drawn zoom, eases toward the step
 static float view_x, view_y; // image point at the middle of the screen
 static float bars_t;
 
+static int preview;         // 1: the camera's preview, full photo on its way; 2: the preview is all there is
+
 // Decoding happens on a worker so flipping stays responsive.
 static SceUID wake = -1;
-static volatile int want = -1, done_idx = -1;
+static volatile int want = -1, done_idx = -1, done_preview;
 static u8 *volatile done_rgba;
 static volatile int done_w, done_h;
+static volatile int dir = 1;           // the way the last flip went
+static volatile int keep_a = -1, keep_b = -1; // decodes stop once want is neither
+
+// One photo decoded ahead, in the direction of travel. Worker only.
+static u8 *ahead_rgba;
+static int ahead_idx = -1, ahead_w, ahead_h;
+#define AHEAD_ROOM (14 << 20) // only read ahead with this much memory in one piece
 
 // Halves a picture until both sides fit max_side.
 static u8 *fit_side(u8 *rgba, int *w, int *h)
@@ -63,22 +72,77 @@ static u8 *fit_side(u8 *rgba, int *w, int *h)
     return rgba;
 }
 
+static int stale(void) { int w = want; return w != keep_a && w != keep_b; }
+
+// Hands a picture to the main thread. Gives up (freeing it) if the viewer
+// moved on before it was taken.
+static void publish(int idx, u8 *rgba, int w, int h, int is_preview)
+{
+    while (done_idx >= 0 && want == idx) sceKernelDelayThread(5000);
+    if (want != idx) { free(rgba); return; }
+    done_rgba = rgba;
+    done_w = w;
+    done_h = h;
+    done_preview = is_preview;
+    done_idx = idx;
+}
+
+static u8 *decode(int idx, int *w, int *h)
+{
+    *w = *h = 0;
+    u8 *rgba = image_load(photos[idx].path, DETAIL, w, h);
+    if (rgba && !(rgba = fit_side(rgba, w, h))) *w = -1;
+    return rgba;
+}
+
 static int worker(SceSize args, void *argp)
 {
     (void)args; (void)argp;
+    image_cancel_on(stale);
     for (;;) {
         sceKernelWaitSema(wake, 1, NULL);
         int idx = want;
-        if (idx < 0) continue;
-        int w = 0, h = 0;
-        u8 *rgba = image_load(photos[idx].path, DETAIL, &w, &h);
-        if (rgba) rgba = fit_side(rgba, &w, &h);
-        if (want != idx) { free(rgba); continue; } // flipped past it meanwhile
-        while (done_idx >= 0) sceKernelDelayThread(5000); // the last one hasn't been taken
-        done_rgba = rgba;
-        done_w = w;
-        done_h = h;
-        done_idx = idx;
+        if (idx < 0) { // closed: let go of what was read ahead
+            free(ahead_rgba);
+            ahead_rgba = NULL;
+            ahead_idx = -1;
+            continue;
+        }
+        if (idx == ahead_idx) {
+            publish(idx, ahead_rgba, ahead_w, ahead_h, 0);
+            ahead_rgba = NULL;
+            ahead_idx = -1;
+        } else {
+            plib_thumbs_wait(); // one big decode at a time; waiting here keeps the screen moving
+            keep_a = idx;
+            keep_b = -1;
+            int w, h;
+            u8 *small = image_preview(photos[idx].path, &w, &h);
+            if (small) publish(idx, small, w, h, 1);
+            u8 *rgba = decode(idx, &w, &h);
+            if (want != idx) { free(rgba); continue; } // flipped past it meanwhile
+            publish(idx, rgba, w, h, 0);
+        }
+        // Read the next one ahead while this one is looked at.
+        int next = idx + dir;
+        if (next < run_first || next >= run_first + run_count || want != idx) continue;
+        free(ahead_rgba);
+        ahead_rgba = NULL;
+        ahead_idx = -1;
+        if (image_room() < AHEAD_ROOM) continue;
+        keep_a = idx;
+        keep_b = next;
+        int w, h;
+        u8 *rgba = decode(next, &w, &h);
+        if (rgba && (want == idx || want == next)) {
+            ahead_rgba = rgba;
+            ahead_idx = next;
+            ahead_w = w;
+            ahead_h = h;
+            if (want == next) sceKernelSignalSema(wake, 1); // flipped to it while it was read
+        } else {
+            free(rgba);
+        }
     }
     return 0;
 }
@@ -91,7 +155,8 @@ static void free_tiles(void)
 
 static int tiles_across(void) { return (img_w + TILE - 1) / TILE; }
 
-static void make_tiles(const u8 *rgba)
+// Returns 0 when memory ran out partway.
+static int make_tiles(const u8 *rgba)
 {
     int across = tiles_across(), down = (img_h + TILE - 1) / TILE;
     for (int ty = 0; ty < down; ty++)
@@ -99,16 +164,20 @@ static void make_tiles(const u8 *rgba)
             int x0 = tx * TILE, y0 = ty * TILE;
             int w = img_w - x0 < TILE ? img_w - x0 : TILE, h = img_h - y0 < TILE ? img_h - y0 : TILE;
             Texture *t = tex_create(w, h);
+            if (!t) { free_tiles(); return 0; }
             for (int y = 0; y < h; y++)
                 memcpy(t->px + y * t->tw, rgba + ((y0 + y) * img_w + x0) * 4, w * 4);
             tex_upload(t);
             tiles[tile_count++] = t;
         }
+    return 1;
 }
 
 static void show(int index)
 {
+    dir = index < cur ? -1 : 1;
     cur = index;
+    preview = 0;
     free_tiles();
     state = 0;
     zoom_step = 0;
@@ -156,16 +225,25 @@ static void clamp_view(void)
 static void take_decoded(void)
 {
     if (done_idx < 0) return;
-    if (done_idx == run_first + cur && state == 0) {
-        img_w = done_w;
-        img_h = done_h;
-        if (done_rgba) {
-            make_tiles(done_rgba);
-            state = 1;
-            view_x = img_w / 2.0f;
-            view_y = img_h / 2.0f;
+    if (done_idx == run_first + cur && (state == 0 || (preview == 1 && !done_preview))) {
+        if (!done_rgba) {
+            if (preview) preview = 2; // keep the preview up
+            else state = done_w < 0 ? -2 : -1;
         } else {
-            state = -1;
+            free_tiles();
+            img_w = done_w;
+            img_h = done_h;
+            if (make_tiles(done_rgba)) {
+                state = 1;
+                preview = done_preview;
+                zoom_step = 0;
+                zoom = 1;
+                view_x = img_w / 2.0f;
+                view_y = img_h / 2.0f;
+            } else {
+                state = -2;
+                preview = 0;
+            }
         }
     }
     free(done_rgba);
@@ -182,6 +260,7 @@ int pviewer_update(const Input *in, float dt)
 
     if (p & PSP_CTRL_CIRCLE) {
         want = -1;
+        sceKernelSignalSema(wake, 1);
         free_tiles();
         return 1;
     }
@@ -189,7 +268,7 @@ int pviewer_update(const Input *in, float dt)
     u32 nav = in->nav & ~(zoom_step ? in->stick_dirs : 0);
     if (nav & PSP_CTRL_LEFT && cur > 0) show(cur - 1);
     else if (nav & PSP_CTRL_RIGHT && cur < run_count - 1) show(cur + 1);
-    if (state != 1) return 0;
+    if (state != 1 || preview) return 0;
 
     if (p & PSP_CTRL_RTRIGGER && zoom_step < 2) zoom_step++;
     if (p & PSP_CTRL_LTRIGGER && zoom_step > 0) zoom_step--;
@@ -282,7 +361,13 @@ static void draw_bars(void)
         ui_rrect(x + 3, base - 5, 3, 3, 1.5f, c);
         x -= 12;
     }
-    if (state == 1) x = hint_text(x, base, "L/R", "Zoom", c);
+    if (state == 1 && !preview) x = hint_text(x, base, "L/R", "Zoom", c);
+    if (preview) {
+        const char *note = preview == 1 ? "Loading\xE2\x80\xA6" : "Preview only";
+        x -= font_width(f_hint, note, 0);
+        font_draw(f_hint, x, base, note, c, 0);
+        x -= 12;
+    }
     if (!zoom_step && run_count > 1) {
         x -= ui_hint_arrows_width(f_hint, "Prev / Next");
         ui_hint_arrows(f_hint, x, base, 0, "Prev / Next", c);
@@ -296,10 +381,12 @@ void pviewer_draw(void)
         float s = fit_scale() * zoom;
         draw_photo(SCREEN_W / 2 - view_x * s, SCREEN_H / 2 - view_y * s, s);
     } else {
-        const char *msg = state ? "This photo can't be opened" : "Loading\xE2\x80\xA6";
+        const char *msg = state == -2 ? "This photo is too big to open on the PSP"
+                        : state ? "This photo can't be opened" : "Loading\xE2\x80\xA6";
         font_draw_center(f_small, SCREEN_W / 2, SCREEN_H / 2 + 4, msg, MUTED);
         bars_t = BARS_SECONDS; // keep the name up while there's nothing else
     }
+    if (preview) bars_t = BARS_SECONDS; // the name and note stay up until the photo is in
     draw_bars();
     if (state == 1 && zoom_step) draw_minimap(1); // stays up while zoomed
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);

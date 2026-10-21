@@ -29,9 +29,11 @@ extern PhotoAlbum *palbums;
 extern int palbum_count;
 
 void plib_init(const char *data_dir, const char *picture_dir);
+const char *plib_dir(void); // like ms0:/PICTURE
 void plib_scan(void);
 
-void plib_thumbs(int on); // off waits for the thumbnail in progress
+void plib_thumbs(int on);
+void plib_thumbs_wait(void); // until the thumbnail in progress (if any) is done
 void plib_want(int index); // made next; call each frame for what's on screen
 const Texture *plib_thumb(int index); // PTHUMB_W x PTHUMB_H, or NULL
 

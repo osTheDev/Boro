@@ -61,7 +61,7 @@ static void load_script(void)
         { "UP", PSP_CTRL_UP }, { "DOWN", PSP_CTRL_DOWN }, { "LEFT", PSP_CTRL_LEFT }, { "RIGHT", PSP_CTRL_RIGHT },
         { "CROSS", PSP_CTRL_CROSS }, { "CIRCLE", PSP_CTRL_CIRCLE }, { "SQUARE", PSP_CTRL_SQUARE },
         { "TRIANGLE", PSP_CTRL_TRIANGLE }, { "L", PSP_CTRL_LTRIGGER }, { "R", PSP_CTRL_RTRIGGER },
-        { "START", PSP_CTRL_START }, { "SELECT", PSP_CTRL_SELECT },
+        { "START", PSP_CTRL_START }, { "SELECT", PSP_CTRL_SELECT }, { "HOLD", PSP_CTRL_HOLD },
     };
     char buf[2048];
     SceUID fd = sceIoOpen("ms0:/boro_script.txt", PSP_O_RDONLY, 0);

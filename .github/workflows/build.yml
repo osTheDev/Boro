@@ -21,7 +21,7 @@ jobs:
       - name: Build
         run: make
       - name: Package
-        run: mkdir -p dist/PSP/GAME/Boro && cp EBOOT.PBP kernel/boro_kernel.prx dist/PSP/GAME/Boro/
+        run: mkdir -p dist/PSP/GAME/Boro && cp EBOOT.PBP kernel/boro_kernel.prx res/fonts/OFL-*.txt dist/PSP/GAME/Boro/
       - uses: actions/upload-artifact@v4
         with:
           name: Boro-EBOOT

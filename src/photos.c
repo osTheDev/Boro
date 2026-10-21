@@ -163,9 +163,7 @@ void photos_draw(float dt)
     }
 
     if (!n) {
-        font_draw_center(f_head, SCREEN_W / 2, 120, "No photos yet", TEXT);
-        font_draw_center(f_small, SCREEN_W / 2, 142, "Put JPEGs or PNGs in PICTURE on your memory stick.", MUTED);
-        font_draw_center(f_small, SCREEN_W / 2, 156, "Each folder there becomes an album.", MUTED);
+        ui_empty_card(150, "No photos yet", "JPEG or PNG photos into", plib_dir(), "Each folder there becomes an album.");
     } else {
         font_draw_fit(f_head, GRID_X, 50, head, TEXT, 300);
         float hw = font_width(f_head, head, 0);

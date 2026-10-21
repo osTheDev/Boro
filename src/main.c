@@ -1,7 +1,9 @@
+#include <pspctrl.h>
 #include <pspkernel.h>
 #include <psppower.h>
 #include <psprtc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "art.h"
 #include "flac.h"
@@ -18,6 +20,8 @@
 #include "video.h"
 #include "visual.h"
 #include "plib.h"
+#include "pocket.h"
+#include "splash.h"
 #include "vlib.h"
 #include "volume.h"
 #include "player.h"
@@ -28,7 +32,7 @@ PSP_MODULE_INFO("Boro", PSP_MODULE_USER, 0, 1);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO };
+enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO, MODE_SPLASH, MODE_NO_MUSIC };
 
 
 // The music player in the theme picked in Settings.
@@ -55,6 +59,16 @@ static void music_draw(float dt)
 
 int main(int argc, char *argv[])
 {
+#ifdef BORO_SCRIPT
+    // The emulator has more memory than a PSP-3000; hold the extra back so
+    // test runs run out where a real one would.
+    {
+        u32 lo = 0, hi = 128u << 20;
+        while (hi - lo > (64 << 10)) { u32 m = (lo + hi) / 2; void *volatile b = malloc(m); if (b) { free(b); lo = m; } else hi = m; }
+        static void *volatile ballast __attribute__((unused));
+        if (lo > (46u << 20)) ballast = malloc(lo - (46u << 20));
+    }
+#endif
     // argv[0] is like "ms0:/PSP/GAME/Boro/EBOOT.PBP": keep data next to the
     // EBOOT and read music from MUSIC on the same device.
     char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC", video_dir[64] = "ms0:/VIDEO", picture_dir[64] = "ms0:/PICTURE";
@@ -86,7 +100,7 @@ int main(int argc, char *argv[])
     u64 tick_res = sceRtcGetTickResolution(), last;
     sceRtcGetCurrentTick(&last);
     Input in;
-    int mode = MODE_HOME, settings_from = MODE_HOME, last_song = -1, lists_loaded = 0, visual_on = 0, waking = 0;
+    int mode = MODE_SPLASH, settings_from = MODE_HOME, last_song = -1, lists_loaded = 0, visual_on = 0, waking = 0;
     float idle_t = 0;
     int cpu_mhz = 0;
     while (sys_running()) {
@@ -97,6 +111,7 @@ int main(int argc, char *argv[])
         if (dt > 0.1f) dt = 0.1f;
 
         sys_read_input(&in);
+        int screen_off = pocket_frame(&in, dt);
         art_frame();
         volume_frame(dt);
         int song = player_song();
@@ -113,7 +128,7 @@ int main(int argc, char *argv[])
         // While music plays the PSP mustn't go to sleep, and with "Keep
         // screen on" the backlight stays up too.
         if (player_song() >= 0 && !player_paused())
-            scePowerTick(settings.keep_on ? PSP_POWER_TICK_ALL : PSP_POWER_TICK_SUSPEND);
+            scePowerTick(settings.keep_on && !screen_off ? PSP_POWER_TICK_ALL : PSP_POWER_TICK_SUSPEND);
         // Full speed only for video (decoding and thumbnails); menus and
         // music run slower to save battery.
         int want_mhz = mode == MODE_VIDEO ? 333 : 222;
@@ -122,10 +137,18 @@ int main(int argc, char *argv[])
             cpu_mhz = want_mhz;
         }
 
+        // Pocket mode: music plays on with the screen off. Black frames keep
+        // it dark even if the backlight couldn't be switched off.
+        if (screen_off) {
+            gfx_begin(RGBA(0, 0, 0, 255));
+            gfx_end();
+            continue;
+        }
+
         // Idle visualizer: any button (or the stick) wakes the screen, and
         // that press does nothing else.
         int touched = in.held || in.stick_x > 40 || in.stick_x < -40;
-        idle_t = touched ? 0 : idle_t + dt;
+        idle_t = touched || pocket_locked() ? 0 : idle_t + dt; // unlocking returns to the same screen
         if (visual_on) {
             if (touched || player_song() < 0 || player_paused()) {
                 visual_on = 0;
@@ -148,9 +171,19 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        if (mode == MODE_HOME) {
+        if (mode == MODE_SPLASH) {
+            if (splash_update(dt)) mode = MODE_HOME;
+            if (mode == MODE_SPLASH) splash_draw();
+            else home_draw();
+        } else if (mode == MODE_NO_MUSIC) {
+            if (in.pressed & PSP_CTRL_CIRCLE) mode = MODE_HOME;
+            if (mode == MODE_NO_MUSIC) home_draw_no_music();
+            else home_draw();
+        } else if (mode == MODE_HOME) {
             int r = home_update(&in, dt);
-            if (r == HOME_OPEN_MUSIC) {
+            if (r == HOME_OPEN_MUSIC && library_state() == LIB_READY && !lib.song_count) {
+                mode = MODE_NO_MUSIC;
+            } else if (r == HOME_OPEN_MUSIC) {
                 mode = MODE_MUSIC;
                 music_enter();
             } else if (r == HOME_OPEN_VIDEO) {
@@ -165,6 +198,7 @@ int main(int argc, char *argv[])
                 settings_enter();
             }
             if (mode == MODE_HOME) home_draw();
+            else if (mode == MODE_NO_MUSIC) home_draw_no_music();
         } else if (mode == MODE_VIDEO) {
             if (video_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_VIDEO) video_draw(dt);

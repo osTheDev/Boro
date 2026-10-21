@@ -319,6 +319,8 @@ const Texture *vlib_thumb(int index)
     return l->tex;
 }
 
+const char *vlib_dir(void) { return video_dir; }
+
 void vlib_init(const char *data, const char *dir)
 {
     snprintf(data_dir, sizeof(data_dir), "%s", data);
