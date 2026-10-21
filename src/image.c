@@ -7,6 +7,7 @@
 #include <jerror.h>
 #include <png.h>
 #include <pspiofilemgr.h>
+#include <pspthreadman.h>
 #include <setjmp.h>
 
 #define MAX_PIXELS (3 * 1024 * 1024) // 12 MB of RGBA
@@ -24,6 +25,20 @@ static u32 heap_largest(void)
     }
     return lo;
 }
+
+// A decode on the thread that set it stops early when this says so.
+static int (*cancel_fn)(void);
+static SceUID cancel_thread = -1;
+
+void image_cancel_on(int (*cancelled)(void))
+{
+    cancel_fn = cancelled;
+    cancel_thread = sceKernelGetThreadId();
+}
+
+static int cancelled(void) { return cancel_fn && cancel_thread == sceKernelGetThreadId() && cancel_fn(); }
+
+u32 image_room(void) { return heap_largest(); }
 
 typedef struct { struct jpeg_error_mgr mgr; jmp_buf jump; } JpegErr;
 
@@ -81,6 +96,7 @@ static u8 *decode_jpeg(const u8 *data, u32 size, FILE *file, int want, int *w, i
     cinfo.scale_num = 1;
     cinfo.scale_denom = denom;
     cinfo.out_color_space = JCS_RGB;
+    cinfo.dct_method = JDCT_IFAST; // scaled down anyway, so the faster IDCT doesn't show
     jpeg_start_decompress(&cinfo);
     *w = cinfo.output_width;
     *h = cinfo.output_height;
@@ -93,6 +109,7 @@ static u8 *decode_jpeg(const u8 *data, u32 size, FILE *file, int want, int *w, i
     while (cinfo.output_scanline < cinfo.output_height) {
         u8 *rows[1] = { row };
         int y = cinfo.output_scanline;
+        if (!(y & 15) && cancelled()) longjmp(err.jump, 1);
         jpeg_read_scanlines(&cinfo, rows, 1);
         for (int x = 0; x < *w; x++) {
             u8 *d = out + (y * *w + x) * 4;
@@ -227,30 +244,40 @@ static u8 *orient(u8 *src, int *w, int *h, int o)
     return (u8 *)out;
 }
 
-u8 *image_load(const char *path, int want, int *w, int *h)
+// The camera's own preview, if it is in the head of the file, has the
+// photo's shape (some are letterboxed to 4:3) and its shorter side is at least
+// want pixels. Turned upright.
+static u8 *exif_preview(const Exif *e, int want, int *w, int *h)
+{
+    if (!e->thumb || !e->width || !e->height) return NULL;
+    u8 *small = image_decode(e->thumb, e->thumb_size, want, w, h);
+    if (small && (*w < *h ? *w : *h) >= want && abs((int)(*w * e->height) - (int)(*h * e->width)) * 50 <= (int)(*w * e->height))
+        return orient(small, w, h, e->orient);
+    free(small);
+    return NULL;
+}
+
+// The photo, or with want < 0 only its camera preview.
+static u8 *load(const char *path, int want, int *w, int *h)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
+    // Memory stick reads are slow one small block at a time.
+    setvbuf(f, NULL, _IOFBF, 128 * 1024);
     u8 *head = malloc(64 * 1024);
     u32 n = head ? fread(head, 1, 64 * 1024, f) : 0;
     u8 *out = NULL;
     int png = is_png(head, n), jpeg = n >= 4 && head[0] == 0xFF && head[1] == 0xD8;
     Exif exif;
     exif_read(head, jpeg ? n : 0, &exif);
-    // A small picture can come from the camera's own preview, which is far
-    // quicker than reading a whole 12 MP photo. Only when it is big enough and
-    // has the photo's shape (some are letterboxed to 4:3).
-    if (jpeg && want > 0 && exif.thumb && exif.width && exif.height) {
-        u8 *small = image_decode(exif.thumb, exif.thumb_size, want, w, h);
-        if (small && (*w < *h ? *w : *h) >= want && abs((int)(*w * exif.height) - (int)(*h * exif.width)) * 50 <= (int)(*w * exif.height)) {
-            free(head);
-            fclose(f);
-            return orient(small, w, h, exif.orient);
-        }
-        free(small);
-    }
-    int o = exif.orient;
+    // A small picture can come from the preview, far quicker than reading a
+    // whole 12 MP photo.
+    if (jpeg && want) out = exif_preview(&exif, want < 0 ? 0 : want, w, h);
     free(head);
+    if (out || want < 0) {
+        fclose(f);
+        return out;
+    }
     if (png) {
         fclose(f);
         png_image img;
@@ -263,8 +290,12 @@ u8 *image_load(const char *path, int want, int *w, int *h)
     fseek(f, 0, SEEK_SET);
     out = decode_jpeg(NULL, 0, f, want, w, h);
     fclose(f);
-    return out ? orient(out, w, h, o) : NULL;
+    return out ? orient(out, w, h, exif.orient) : NULL;
 }
+
+u8 *image_load(const char *path, int want, int *w, int *h) { return load(path, want, w, h); }
+
+u8 *image_preview(const char *path, int *w, int *h) { return load(path, -1, w, h); }
 
 u8 *image_read_file(const char *path, u32 max, u32 *size)
 {

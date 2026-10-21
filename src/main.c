@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
     {
         u32 lo = 0, hi = 128u << 20;
         while (hi - lo > (64 << 10)) { u32 m = (lo + hi) / 2; void *volatile b = malloc(m); if (b) { free(b); lo = m; } else hi = m; }
-        static void *volatile ballast;
+        static void *volatile ballast __attribute__((unused));
         if (lo > (46u << 20)) ballast = malloc(lo - (46u << 20));
     }
 #endif

@@ -281,11 +281,13 @@ const Texture *plib_thumb(int index)
     thumb_path(&photos[index], path, sizeof(path));
     SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (fd < 0) return NULL;
-    ThumbHead h;
-    int ok = sceIoRead(fd, &h, sizeof(h)) == sizeof(h) && h.has_pixels;
-    for (int y = 0; ok && y < PTHUMB_H; y++)
-        ok = sceIoRead(fd, l->tex->px + y * l->tex->tw, PTHUMB_W * 4) == PTHUMB_W * 4;
+    // One read for the whole file: the memory stick is slow at many small ones.
+    static struct { ThumbHead h; u32 px[PTHUMB_W * PTHUMB_H]; } file;
+    int got = sceIoRead(fd, &file, sizeof(file));
     sceIoClose(fd);
+    int ok = got == sizeof(file) && file.h.has_pixels;
+    for (int y = 0; ok && y < PTHUMB_H; y++)
+        memcpy(l->tex->px + y * l->tex->tw, file.px + y * PTHUMB_W, PTHUMB_W * 4);
     if (!ok) { photos[index].thumb = 0; return NULL; }
     round_alpha(l->tex, 5);
     tex_upload(l->tex);
