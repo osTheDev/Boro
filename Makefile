@@ -17,6 +17,8 @@ BUILD_PRX = 1
 EXTRA_TARGETS = EBOOT.PBP kernel/boro_kernel.prx
 EXTRA_CLEAN = kernel/main.o kernel/mecore.o kernel/boro_kernel.elf
 PSP_EBOOT_TITLE = Boro
+PSP_EBOOT_ICON = res/xmb/ICON0.PNG
+PSP_EBOOT_PIC1 = res/xmb/PIC1.PNG
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
