@@ -48,7 +48,7 @@ static float scroll;
 
 // Player
 static int playing = -1;
-static float overlay_t, volume_t, save_t, end_t;
+static float overlay_t, volume_t, save_t, end_t, fit_t;
 static int gain = 100;
 static int seeking; // -1 / 1 while the d-pad is held
 static float seek_ms, seek_speed;
@@ -129,6 +129,7 @@ static void start(int index, u32 from)
     vplayer_set_gain(gain);
     playing = index;
     overlay_t = 3;
+    fit_t = 0;
     save_t = 0;
     end_t = 0;
     seeking = 0;
@@ -356,8 +357,14 @@ static void browser_draw(float dt)
 static void player_input(const Input *in, float dt)
 {
     u32 p = in->pressed;
-    if (in->pressed || (in->held & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT))) overlay_t = 3;
+    // SELECT shows its own pill, so it leaves the controls hidden.
+    if ((in->pressed & ~PSP_CTRL_SELECT) || (in->held & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT))) overlay_t = 3;
     if (p & PSP_CTRL_CIRCLE) { stop(0); return; }
+    if (p & PSP_CTRL_SELECT) {
+        Video *v = &videos[playing];
+        vlib_set_fit(playing, ((v->fit < 0 ? settings.video_fit : v->fit) + 1) % FIT_COUNT);
+        fit_t = 1.5f;
+    }
     if (p & PSP_CTRL_CROSS) {
         vplayer_toggle_pause();
         if (vplayer_paused()) vlib_set_resume(playing, vplayer_position());
@@ -392,6 +399,7 @@ static void player_update(const Input *in, float dt)
     scePowerTick(0); // no screen dimming while watching
     if (overlay_t > 0 && !vplayer_paused()) overlay_t -= dt;
     if (volume_t > 0) volume_t -= dt;
+    if (fit_t > 0) fit_t -= dt;
     player_input(in, dt);
     if (playing < 0) return;
     // Remember the spot now and then, in case the PSP is switched off.
@@ -403,15 +411,24 @@ static void player_update(const Input *in, float dt)
     }
 }
 
+static int fit_of(void)
+{
+    int fit = videos[playing].fit;
+    return fit < 0 ? settings.video_fit : fit;
+}
+
 static void player_draw(void)
 {
     gfx_begin(HEX(0x000000, 255));
     const Texture *f = vplayer_frame();
     const Mp4 *m = vplayer_mp4();
     if (f && vplayer_video_ok()) {
-        // Fit the picture to the screen, keeping its shape.
-        float s = fminf((float)SCREEN_W / f->w, (float)SCREEN_H / f->h);
+        // Fit shows it all with bars, Zoom fills the screen and crops what
+        // spills over, Stretch fills it out of shape.
+        float sx = (float)SCREEN_W / f->w, sy = (float)SCREEN_H / f->h;
+        float s = fit_of() == FIT_ZOOM ? fmaxf(sx, sy) : fminf(sx, sy);
         float w = f->w * s, h = f->h * s;
+        if (fit_of() == FIT_STRETCH) { w = SCREEN_W; h = SCREEN_H; }
         gfx_filter(1);
         gfx_tex(f, (SCREEN_W - w) / 2, (SCREEN_H - h) / 2, w, h, 0xFFFFFFFF);
     } else if (!vplayer_video_ok()) {
@@ -459,6 +476,16 @@ static void player_draw(void)
         x = ui_hint_arrows(f_chip, x, hy, 0, "Seek", hc) + 12;
         ui_hint_arrows(f_chip, x, hy, 1, "Volume", hc);
         draw_hints(g, l, 2, SCREEN_W - 14, hy, hc);
+    }
+    if (fit_t > 0) {
+        float fa = fminf(1.0f, fit_t / 0.3f);
+        char label[32];
+        snprintf(label, sizeof(label), "Picture: %s", fit_names[fit_of()]);
+        float w = 44 + font_width(f_small, label, 0), x = (SCREEN_W - w) / 2, y = 12;
+        ui_rrect(x, y, w, 26, 13, RGBA(20, 22, 30, (int)(225 * fa)));
+        ui_ring(x, y, w, 26, 13, color_alpha(HEX(0x6C8CFF, 150), fa));
+        ui_ring(x + 14, y + 7, 13, 12, 1, color_alpha(ACCENT, fa));
+        font_draw(f_small, x + 34, y + 17, label, color_alpha(TEXT, fa), 0);
     }
     if (volume_t > 0) {
         float va = fminf(1.0f, volume_t / 0.3f);

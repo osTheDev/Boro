@@ -67,9 +67,10 @@ static void load_resume(void)
         if (!a) continue;
         *a++ = 0;
         unsigned pos = 0, when = 0;
-        sscanf(a, "%u\t%u", &pos, &when);
+        int fit = -1;
+        sscanf(a, "%u\t%u\t%d", &pos, &when, &fit);
         for (int i = 0; i < video_count; i++)
-            if (!strcmp(videos[i].path, line)) { videos[i].resume_ms = pos; videos[i].watched = when; }
+            if (!strcmp(videos[i].path, line)) { videos[i].resume_ms = pos; videos[i].watched = when; videos[i].fit = fit; }
     }
     fclose(f);
 }
@@ -81,7 +82,8 @@ static void save_resume(void)
     FILE *f = fopen(path, "w");
     if (!f) return;
     for (int i = 0; i < video_count; i++)
-        if (videos[i].watched) fprintf(f, "%s\t%u\t%u\n", videos[i].path, (unsigned)videos[i].resume_ms, (unsigned)videos[i].watched);
+        if (videos[i].watched)
+            fprintf(f, "%s\t%u\t%u\t%d\n", videos[i].path, (unsigned)videos[i].resume_ms, (unsigned)videos[i].watched, videos[i].fit);
     fclose(f);
 }
 
@@ -94,6 +96,13 @@ void vlib_set_resume(int index, u32 ms)
     if (d && (ms + 30000 >= d || ms >= d / 20 * 19)) ms = 0;
     v->resume_ms = ms;
     v->watched = now_seconds();
+    save_resume();
+}
+
+void vlib_set_fit(int index, int fit)
+{
+    if (index < 0 || index >= video_count) return;
+    videos[index].fit = fit;
     save_resume();
 }
 
@@ -162,6 +171,7 @@ static void walk(const char *dir, int category, int depth)
             Video *v = &videos[video_count++];
             memset(v, 0, sizeof(*v));
             strcpy(v->path, path);
+            v->fit = -1;
             make_title(v->title, sizeof(v->title), ent.d_name);
             v->category = category;
             u64 tick = 0;

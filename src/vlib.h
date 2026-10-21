@@ -19,6 +19,7 @@ typedef struct {
     int thumb;         // 0 not made yet, 1 made, -1 no picture
     u32 resume_ms;     // where it was stopped, 0 for the start
     u32 watched;       // last time it was played, seconds; 0 never
+    int fit;           // FIT_* picked while watching, -1 for the Settings default
 } Video;
 
 extern Video *videos;
@@ -34,6 +35,7 @@ void vlib_thumbs(int on);
 const Texture *vlib_thumb(int index); // 160x90, or NULL
 
 void vlib_set_resume(int index, u32 ms); // saves; ms near the end counts as finished
+void vlib_set_fit(int index, int fit);
 int vlib_continue(void); // the latest video stopped partway, or -1
 
 #endif

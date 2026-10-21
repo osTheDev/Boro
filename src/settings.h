@@ -8,6 +8,7 @@ enum { THEME_FLAC, THEME_POD, THEME_DECK, THEME_COUNT };
 enum { DECK_ICE, DECK_AMBER, DECK_GREEN, DECK_RED, DECK_WHITE, DECK_PURPLE, DECK_GRADIENT, DECK_COLORS };
 
 enum { DELAY_15S, DELAY_30S, DELAY_1M, DELAY_2M, DELAY_COUNT };
+enum { FIT_FIT, FIT_ZOOM, FIT_STRETCH, FIT_COUNT };
 
 typedef struct {
     int theme;      // THEME_*
@@ -18,11 +19,13 @@ typedef struct {
     int idle_delay; // DELAY_*
     int vis_style;  // 0 rotates every scene, else one scene (1-based)
     int resume_videos;
+    int video_fit;  // FIT_*, for videos without their own choice
 } Settings;
 
 extern Settings settings;
 extern const char *const theme_names[THEME_COUNT];
 extern const char *const deck_color_names[DECK_COLORS];
+extern const char *const fit_names[FIT_COUNT];
 
 void settings_load(const char *data_dir);
 void settings_save(void);
