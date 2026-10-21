@@ -223,6 +223,7 @@ int main(int argc, char *argv[])
         }
     }
     stats_flush();
+    video_save(); // quit from the HOME menu mid-video
     sceKernelExitGame();
     return 0;
 }

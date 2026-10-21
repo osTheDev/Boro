@@ -112,6 +112,11 @@ void video_enter(void)
 
 int video_playing(void) { return playing >= 0; }
 
+void video_save(void)
+{
+    if (playing >= 0) vlib_set_resume(playing, vplayer_position());
+}
+
 static void start(int index, u32 from)
 {
     vlib_thumbs(0);
@@ -353,7 +358,10 @@ static void player_input(const Input *in, float dt)
     u32 p = in->pressed;
     if (in->pressed || (in->held & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT))) overlay_t = 3;
     if (p & PSP_CTRL_CIRCLE) { stop(0); return; }
-    if (p & PSP_CTRL_CROSS) vplayer_toggle_pause();
+    if (p & PSP_CTRL_CROSS) {
+        vplayer_toggle_pause();
+        if (vplayer_paused()) vlib_set_resume(playing, vplayer_position());
+    }
     u32 pos = vplayer_position(), dur = vplayer_mp4()->duration_ms;
     if (p & PSP_CTRL_LTRIGGER) vplayer_seek(pos > 10000 ? pos - 10000 : 0);
     if (p & PSP_CTRL_RTRIGGER) vplayer_seek(pos + 10000);
@@ -366,7 +374,10 @@ static void player_input(const Input *in, float dt)
     int dir = in->held & PSP_CTRL_RIGHT ? 1 : in->held & PSP_CTRL_LEFT ? -1 : 0;
     if (dir) {
         if (seeking != dir) { seek_ms = seeking ? seek_ms : pos; seek_speed = 10000; seeking = dir; }
-        seek_speed = fminf(seek_speed + dt * 40000, 180000);
+        // Top speed crosses the whole video in about 8 seconds (never under
+        // 3 minutes a second), reached after holding for 1.5 seconds.
+        float top = fmaxf(180000, dur / 8.0f);
+        seek_speed = fminf(seek_speed + dt * top / 1.5f, top);
         seek_ms += dir * seek_speed * dt;
         if (seek_ms < 0) seek_ms = 0;
         if (seek_ms > dur) seek_ms = dur;
@@ -385,7 +396,7 @@ static void player_update(const Input *in, float dt)
     if (playing < 0) return;
     // Remember the spot now and then, in case the PSP is switched off.
     save_t += dt;
-    if (save_t > 30) { save_t = 0; vlib_set_resume(playing, vplayer_position()); }
+    if (save_t > 10) { save_t = 0; vlib_set_resume(playing, vplayer_position()); }
     if (vplayer_ended()) {
         end_t += dt;
         if (end_t > 0.5f) stop(1);

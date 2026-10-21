@@ -122,12 +122,17 @@ static void make_title(char *out, int size, const char *name)
     for (char *p = out; *p; p++) if (*p == '_') *p = ' ';
 }
 
-static int category_of(const char *top)
+static int starts(const char *s, const char *word) { return !strncasecmp(s, word, strlen(word)); }
+
+// From a folder's name, loosely: "Movies", "movie", "Films", "Music Videos",
+// "TV Shows" and the like all count.
+static int category_of(const char *name)
 {
-    if (!strcasecmp(top, "Movies")) return VCAT_MOVIES;
-    if (!strcasecmp(top, "Music")) return VCAT_MUSIC;
-    if (!strcasecmp(top, "Shows")) return VCAT_SHOWS;
-    if (!strcasecmp(top, "Clips")) return VCAT_CLIPS;
+    while (*name == ' ' || *name == '_' || *name == '-') name++;
+    if (starts(name, "movie") || starts(name, "film")) return VCAT_MOVIES;
+    if (starts(name, "music")) return VCAT_MUSIC;
+    if (starts(name, "show") || starts(name, "tv") || starts(name, "series")) return VCAT_SHOWS;
+    if (starts(name, "clip")) return VCAT_CLIPS;
     return VCAT_OTHER;
 }
 
@@ -146,7 +151,9 @@ static void walk(const char *dir, int category, int depth)
         if (ent.d_name[0] == '.') continue;
         snprintf(path, sizeof(path), "%s/%s", dir, ent.d_name);
         if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
-            walk(path, depth == 0 ? category_of(ent.d_name) : category, depth + 1);
+            // The first folder down with a known name decides, at any depth.
+            int c = category == VCAT_OTHER ? category_of(ent.d_name) : category;
+            walk(path, c, depth + 1);
         } else if (is_mp4(ent.d_name) && strlen(path) < sizeof(videos->path)) {
             if (video_count == cap) {
                 cap = cap ? cap * 2 : 32;
