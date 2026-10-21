@@ -106,6 +106,8 @@ void sys_read_input(Input *in)
     }
     pad.Buttons |= stick;
     in->stick_x = dx;
+    in->stick_y = dy;
+    in->stick_dirs = stick;
     in->held = pad.Buttons;
     in->pressed = pad.Buttons & ~last_buttons;
     in->nav = in->pressed;

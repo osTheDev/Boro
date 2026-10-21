@@ -9,6 +9,8 @@ typedef struct {
     u32 pressed; // buttons that went down this frame
     u32 nav;     // pressed, plus auto-repeat while the d-pad or L/R is held
     int stick_x; // analog stick, -128 (left) to 127 (right)
+    int stick_y; // -128 (up) to 127 (down)
+    u32 stick_dirs; // d-pad bits that come from the stick being pushed
 } Input;
 
 void sys_init(void);

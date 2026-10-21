@@ -5,6 +5,7 @@
 #include "font.h"
 #include "gfx.h"
 #include "plib.h"
+#include "pviewer.h"
 #include "ui.h"
 
 #define BG HEX(0x0E0F13, 255)
@@ -25,6 +26,7 @@ static Font *f_head, *f_small, *f_label;
 static int album = -1; // the open album, or -1 for the top level
 static int sel, top_sel; // top_sel: where the selection was before opening the album
 static float scroll;
+static int viewing;
 
 // Grid items: at the top level the palbums come first, then loose photos.
 static int item_count(void)
@@ -50,13 +52,25 @@ void photos_enter(void)
     album = -1;
     sel = 0;
     scroll = 0;
+    viewing = 0;
     plib_thumbs(1);
 }
 
 void photos_leave(void) { plib_thumbs(0); }
 
-int photos_update(const Input *in)
+int photos_viewing(void) { return viewing; }
+
+int photos_update(const Input *in, float dt)
 {
+    if (viewing) {
+        if (pviewer_update(in, dt)) {
+            // Back on the photo that was showing.
+            viewing = 0;
+            sel = pviewer_current() + (album < 0 ? palbum_count : 0);
+            plib_thumbs(1);
+        }
+        return 0;
+    }
     u32 p = in->pressed, nav = in->nav;
     if (p & PSP_CTRL_CIRCLE) {
         if (album < 0) return 1;
@@ -71,11 +85,19 @@ int photos_update(const Input *in)
     if (nav & PSP_CTRL_RIGHT && sel < n - 1) sel++;
     if (nav & PSP_CTRL_UP && sel >= COLS) sel -= COLS;
     if (nav & PSP_CTRL_DOWN && sel / COLS < (n - 1) / COLS) sel = sel + COLS < n ? sel + COLS : n - 1;
-    if (p & PSP_CTRL_CROSS && item_photo(sel) < 0) {
+    int photo = item_photo(sel);
+    if (p & PSP_CTRL_CROSS && photo < 0) {
         top_sel = sel;
         album = sel;
         sel = 0;
         scroll = 0;
+    } else if (p & PSP_CTRL_CROSS) {
+        // Flipping stays within the album, or within the loose photos.
+        int first = album >= 0 ? palbums[album].first : loose_first;
+        int count = album >= 0 ? palbums[album].count : photo_count - loose_first;
+        plib_thumbs(0); // the viewer gets the CPU to itself
+        pviewer_open(first, count, photo - first, album >= 0 ? palbums[album].name : "Photos");
+        viewing = 1;
     }
     return 0;
 }
@@ -124,6 +146,10 @@ static void draw_item(int i, float x, float y)
 
 void photos_draw(float dt)
 {
+    if (viewing) {
+        pviewer_draw();
+        return;
+    }
     int n = item_count();
     char sub[64];
     const char *head = "Photos";
@@ -162,8 +188,9 @@ void photos_draw(float dt)
 
     float x = SCREEN_W - 14 - ui_hint_width(f_label, ICON_CIRCLE, "Back");
     ui_hint(f_label, x, SCREEN_H - 8, ICON_CIRCLE, "Back", MUTED);
-    if (n && item_photo(sel) < 0) {
-        x -= 12 + ui_hint_width(f_label, ICON_CROSS, "Open");
-        ui_hint(f_label, x, SCREEN_H - 8, ICON_CROSS, "Open", MUTED);
+    if (n) {
+        const char *verb = item_photo(sel) < 0 ? "Open" : "View";
+        x -= 12 + ui_hint_width(f_label, ICON_CROSS, verb);
+        ui_hint(f_label, x, SCREEN_H - 8, ICON_CROSS, verb, MUTED);
     }
 }

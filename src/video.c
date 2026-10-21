@@ -138,9 +138,10 @@ static void stop(int finished)
     vlib_thumbs(1);
 }
 
-static int browser_update(const Input *in)
+static int browser_update(const Input *in, float dt)
 {
     u32 p = in->pressed, nav = in->nav;
+    if (tab == TAB_PHOTOS && photos_viewing()) return photos_update(in, dt);
     int was = tab;
     if (p & PSP_CTRL_LTRIGGER) tab = (tab + TAB_COUNT - 1) % TAB_COUNT;
     if (p & PSP_CTRL_RTRIGGER) tab = (tab + 1) % TAB_COUNT;
@@ -151,7 +152,7 @@ static int browser_update(const Input *in)
         return 0;
     }
     if (tab == TAB_PHOTOS) {
-        if (!photos_update(in)) return 0;
+        if (!photos_update(in, dt)) return 0;
         photos_leave();
         vlib_thumbs(0);
         return 1;
@@ -313,6 +314,10 @@ static void draw_hints(int glyphs[], const char *labels[], int n, float right, f
 
 static void browser_draw(float dt)
 {
+    if (tab == TAB_PHOTOS && photos_viewing()) {
+        photos_draw(dt);
+        return;
+    }
     gfx_begin(BG);
     draw_top_bar();
     if (tab == TAB_PHOTOS) {
@@ -460,7 +465,7 @@ int video_update(const Input *in, float dt)
         player_update(in, dt);
         return 0;
     }
-    return browser_update(in);
+    return browser_update(in, dt);
 }
 
 void video_draw(float dt)
