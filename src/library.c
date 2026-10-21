@@ -84,8 +84,8 @@ static void save_cache(void)
     if (fd < 0) return;
     u32 head[4] = { CACHE_MAGIC, CACHE_VERSION, lib.song_count, pool_len };
     sceIoWrite(fd, head, sizeof(head));
-    sceIoWrite(fd, lib.songs, lib.song_count * sizeof(Song));
-    sceIoWrite(fd, pool, pool_len);
+    if (lib.song_count) sceIoWrite(fd, lib.songs, lib.song_count * sizeof(Song)); // both NULL when MUSIC is empty
+    if (pool_len) sceIoWrite(fd, pool, pool_len);
     sceIoClose(fd);
 }
 

@@ -158,7 +158,7 @@ static float pingpong_eq(float t, float dur, float off)
     return u < 0.5f ? 0.25f + (1.0f - 0.25f) * (u * 2) : 1.0f + (0.45f - 1.0f) * ((u - 0.5f) * 2);
 }
 
-static void draw_backdrop(void)
+void home_backdrop(void)
 {
     float a = (1 - cosf(t_now * 2 * M_PI / 14.0f)) * 0.5f;
     float b = (1 - cosf(t_now * 2 * M_PI / 18.0f)) * 0.5f;
@@ -329,10 +329,26 @@ static void draw_quit(void)
     ui_hint(f_tiny, hx, hy, ICON_CROSS, "Select", color_alpha(MUTED, k));
 }
 
+void home_draw_no_music(void)
+{
+    gfx_begin(HEX(0x0B0C10, 255));
+    home_backdrop();
+    Font *logo = ui_font(FAMILY_SORA, 800, 13);
+    float x = font_draw(logo, PAD, 22, "FL", TEXT, 0);
+    x = font_draw(logo, x, 22, "/", ACCENT, 0);
+    font_draw(logo, x, 22, "AC", TEXT, 0);
+    ui_empty_card(SCREEN_H / 2, "No music yet", "MP3 files into", library_music_dir(),
+                  "Subfolders are fine. Radio-only artists go in MUSIC/RADIO/.");
+    float hx = SCREEN_W - PAD - ui_hint_width(f_tiny, ICON_CIRCLE, "Back");
+    ui_hint(f_tiny, hx, SCREEN_H - 8, ICON_CIRCLE, "Back", MUTED);
+    ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
+    gfx_end();
+}
+
 void home_draw(void)
 {
     gfx_begin(HEX(0x0B0C10, 255));
-    draw_backdrop();
+    home_backdrop();
     draw_status();
     draw_tiles();
     draw_stats();

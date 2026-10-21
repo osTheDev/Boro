@@ -29,6 +29,7 @@ extern PhotoAlbum *palbums;
 extern int palbum_count;
 
 void plib_init(const char *data_dir, const char *picture_dir);
+const char *plib_dir(void); // like ms0:/PICTURE
 void plib_scan(void);
 
 void plib_thumbs(int on); // off waits for the thumbnail in progress

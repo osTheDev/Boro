@@ -293,6 +293,8 @@ const Texture *plib_thumb(int index)
     return l->tex;
 }
 
+const char *plib_dir(void) { return picture_dir; }
+
 void plib_init(const char *data, const char *dir)
 {
     snprintf(data_dir, sizeof(data_dir), "%s", data);

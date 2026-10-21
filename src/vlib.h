@@ -25,6 +25,7 @@ extern Video *videos;
 extern int video_count;
 
 void vlib_init(const char *data_dir, const char *video_dir);
+const char *vlib_dir(void); // like ms0:/VIDEO
 void vlib_scan(void); // rereads the folder; keeps what's known
 
 // Thumbnails are made one at a time while allowed; vlib_thumbs(0) waits for

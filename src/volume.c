@@ -37,6 +37,8 @@ void volume_frame(float dt)
 
 int volume_level(void) { return level; }
 
+int volume_kernel(void) { return loaded; }
+
 float volume_shown(void)
 {
     if (show_t <= 0) return 0;

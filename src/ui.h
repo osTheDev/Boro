@@ -38,6 +38,14 @@ void ui_format_time(char *out, int size, u32 ms);
 // Eases v toward target; call once per frame.
 float ui_approach(float v, float target, float dt, float speed);
 // The volume bar that drops in while the volume changes, in a theme's colors.
+// A glass card: dark fill and an accent hairline, faded by a (0..1).
+void ui_card(float x, float y, float w, float h, float a);
+// The BORO wordmark and its glowing accent dot, centered on cx at baseline y.
+void ui_wordmark(Font *f, float cx, float y, float tracking, float a);
+// Help shown when MUSIC, VIDEO or PICTURE has nothing in it. what finishes
+// "Connect your PSP over USB and copy", path is the folder; note may be NULL.
+void ui_empty_card(float cy, const char *title, const char *what, const char *path, const char *note);
+// Also draws the HOLD and headphone notices, so every screen calls it last.
 void ui_volume(Font *f, u32 panel, u32 track, u32 fill, u32 text);
 
 #endif

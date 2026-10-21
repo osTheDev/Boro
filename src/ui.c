@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "pocket.h"
 #include "sys.h"
 #include "volume.h"
 
@@ -317,8 +318,49 @@ float ui_approach(float v, float target, float dt, float speed)
     return v + (target - v) * k;
 }
 
+void ui_card(float x, float y, float w, float h, float a)
+{
+    ui_rrect(x, y, w, h, 14, RGBA(28, 30, 40, (int)(245 * a)));
+    ui_ring(x, y, w, h, 14, RGBA(108, 140, 255, (int)(140 * a)));
+}
+
+void ui_wordmark(Font *f, float cx, float y, float tracking, float a)
+{
+    static Texture *glow;
+    if (!glow) glow = tex_glow(64);
+    float w = font_width(f, "BORO", tracking), dot = font_ascent(f) * 0.3f;
+    float x = cx - (w + dot * 3) / 2, dx = x + w + dot * 2, dy = y - font_ascent(f) * 0.45f;
+    font_draw(f, x, y, "BORO", RGBA(242, 242, 245, (int)(255 * a)), tracking);
+    gfx_additive(1);
+    gfx_tex(glow, dx - dot * 2.5f, dy - dot * 2.5f, dot * 5, dot * 5, RGBA(108, 140, 255, (int)(200 * a)));
+    gfx_additive(0);
+    ui_rrect(dx - dot / 2, dy - dot / 2, dot, dot, dot / 2, RGBA(108, 140, 255, (int)(255 * a)));
+}
+
+void ui_empty_card(float cy, const char *title, const char *what, const char *path, const char *note)
+{
+    const u32 accent = RGBA(108, 140, 255, 255), text = RGBA(242, 242, 245, 255), muted = RGBA(181, 184, 196, 255);
+    float w = 300, h = note ? 168 : 150, x = (SCREEN_W - w) / 2, y = cy - h / 2, cx = SCREEN_W / 2;
+    ui_card(x, y, w, h, 1);
+    // A folder: tab, then body.
+    ui_ring(cx - 18, y + 16, 15, 9, 3, accent);
+    ui_ring(cx - 17, y + 17, 13, 7, 2, accent);
+    ui_rrect(cx - 17, y + 21, 34, 4, 2, RGBA(28, 30, 40, 255));
+    ui_ring(cx - 18, y + 20, 36, 28, 4, accent);
+    ui_ring(cx - 17, y + 21, 34, 26, 3, accent);
+    font_draw_center(ui_font(FAMILY_SORA, 700, 17), cx, y + 72, title, text);
+    Font *body = ui_font(FAMILY_MANROPE, 500, 11);
+    font_draw_center(body, cx, y + 96, "Connect your PSP over USB and copy", muted);
+    font_draw_center(body, cx, y + 111, what, muted);
+    char shown[80];
+    snprintf(shown, sizeof(shown), "%s/", path);
+    font_draw_center(ui_font(FAMILY_SORA, 700, 13), cx, y + 132, shown, accent);
+    if (note) font_draw_center(ui_font(FAMILY_MANROPE, 500, 9), cx, y + 152, note, muted);
+}
+
 void ui_volume(Font *f, u32 panel, u32 track, u32 fill, u32 text)
 {
+    pocket_draw(); // HOLD and headphone notices sit on every screen too
     float a = volume_shown();
     int v = volume_level();
     if (a <= 0 || v < 0) return;

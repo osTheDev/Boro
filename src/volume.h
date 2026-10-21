@@ -10,5 +10,6 @@ void volume_init(const char *app_dir);
 void volume_frame(float dt); // call once per frame
 int volume_level(void);      // 0..VOLUME_MAX, or -1 when unknown
 float volume_shown(void);    // overlay opacity, 0 when hidden
+int volume_kernel(void);     // 1 once boro_kernel.prx is running
 
 #endif
