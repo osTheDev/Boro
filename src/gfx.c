@@ -44,6 +44,13 @@ static int pow2(int v)
     return p;
 }
 
+// Rows past the used height are never sampled, so only one spare row (for
+// linear filtering at the bottom edge) is allocated, not the full th.
+static int rows_of(const Texture *t)
+{
+    return t->h + 1 < t->th ? t->h + 1 : t->th;
+}
+
 Texture *tex_create(int w, int h)
 {
     Texture *t = calloc(1, sizeof(Texture));
@@ -51,8 +58,8 @@ Texture *tex_create(int w, int h)
     t->h = h;
     t->tw = pow2(w);
     t->th = pow2(h);
-    t->px = memalign(16, t->tw * t->th * 4);
-    memset(t->px, 0, t->tw * t->th * 4);
+    t->px = memalign(16, t->tw * rows_of(t) * 4);
+    memset(t->px, 0, t->tw * rows_of(t) * 4);
     return t;
 }
 
@@ -64,8 +71,8 @@ Texture *tex_create_alpha8(int w, int h)
     t->tw = pow2(w);
     t->th = pow2(h);
     t->alpha8 = 1;
-    t->px = memalign(16, t->tw * t->th);
-    memset(t->px, 0, t->tw * t->th);
+    t->px = memalign(16, t->tw * rows_of(t));
+    memset(t->px, 0, t->tw * rows_of(t));
     return t;
 }
 
@@ -79,12 +86,14 @@ void tex_destroy(Texture *t)
 
 void tex_upload(Texture *t)
 {
-    tex_upload_rows(t, 0, t->th);
+    tex_upload_rows(t, 0, rows_of(t));
 }
 
 void tex_upload_rows(Texture *t, int y, int h)
 {
     int bpp = t->alpha8 ? 1 : 4;
+    if (y + h > rows_of(t)) h = rows_of(t) - y;
+    if (h <= 0) return;
     sceKernelDcacheWritebackRange((char *)t->px + y * t->tw * bpp, h * t->tw * bpp);
     if (bound == t) bound = NULL;
 }

@@ -1,5 +1,5 @@
 TARGET = Boro
-OBJS = src/main.o src/sys.o src/gfx.o src/font.o src/ui.o src/home.o src/flac.o \
+OBJS = src/main.o src/sys.o src/gfx.o src/font.o src/ui.o src/home.o src/flac.o src/flac_browse.o src/flac_pages.o src/flac_playlists.o \
        src/tags.o src/library.o src/art.o src/player.o src/stations.o src/playlists.o src/volume.o src/settings.o src/scrub.o src/pod.o src/deck.o src/stats.o src/visual.o src/mp4.o src/avc.o src/mpegavc.o src/vplayer.o src/vlib.o src/video.o src/borokernel.o src/fonts.o
 
 INCDIR =

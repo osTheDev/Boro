@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include "avc.h"
 #include "gfx.h"
 #include "player.h"
 #include "settings.h"
@@ -392,25 +391,6 @@ static void player_update(const Input *in, float dt)
     }
 }
 
-// Tiny d-pad triangles (the fonts have none): left/right, or up/down.
-static void triangle(float x, float y, int dir, u32 c)
-{
-    for (int i = 0; i < 4; i++) {
-        float len = 7 - i * 2;
-        if (dir == 0) gfx_rect(x + i, y + i, 1, len, c);        // pointing right
-        else if (dir == 1) gfx_rect(x + 3 - i, y + i, 1, len, c); // left
-        else if (dir == 2) gfx_rect(x + i, y + 3 - i, len, 1, c); // up
-        else gfx_rect(x + i, y + i, len, 1, c);                 // down
-    }
-}
-
-static float arrows(float x, float base, int vertical, const char *label, u32 c)
-{
-    if (vertical) { triangle(x, base - 7, 2, c); triangle(x + 9, base - 6, 3, c); }
-    else { triangle(x, base - 8, 1, c); triangle(x + 6, base - 8, 0, c); }
-    return font_draw(f_chip, x + 19, base, label, c, 0);
-}
-
 static void player_draw(void)
 {
     gfx_begin(HEX(0x000000, 255));
@@ -425,9 +405,6 @@ static void player_draw(void)
     } else if (!vplayer_video_ok()) {
         font_draw_center(f_tab_b, SCREEN_W / 2, 128, "The picture can't be shown here", TEXT);
         font_draw_center(f_small, SCREEN_W / 2, 146, "The sound keeps playing", MUTED);
-        char code[64];
-        snprintf(code, sizeof(code), "Code: %s", strcmp(avc_status(), "ok") ? avc_status() : "no picture");
-        font_draw_center(f_small, SCREEN_W / 2, 166, code, MUTED);
     }
 
     float a = fminf(1.0f, overlay_t / 0.3f);
@@ -467,8 +444,8 @@ static void player_draw(void)
         float x = 14;
         font_draw(f_chip, x, hy, "L/R Skip 10s", hc, 0);
         x += font_width(f_chip, "L/R Skip 10s", 0) + 12;
-        x = arrows(x, hy, 0, "Seek", hc) + 12;
-        arrows(x, hy, 1, "Volume", hc);
+        x = ui_hint_arrows(f_chip, x, hy, 0, "Seek", hc) + 12;
+        ui_hint_arrows(f_chip, x, hy, 1, "Volume", hc);
         draw_hints(g, l, 2, SCREEN_W - 14, hy, hc);
     }
     if (volume_t > 0) {

@@ -187,12 +187,6 @@ static void value_of(int row, char *out, int size)
     }
 }
 
-// Small d-pad triangles: the fonts have none.
-static void triangle(float x, float y, int right, u32 c)
-{
-    for (int i = 0; i < 4; i++) gfx_rect(right ? x + i : x + 3 - i, y + i, 1, 7 - 2 * i, c);
-}
-
 void settings_draw(void)
 {
     gfx_begin(BG);
@@ -232,9 +226,9 @@ void settings_draw(void)
             char value[48];
             value_of(i, value, sizeof(value));
             float tw = font_width(fv, value, 0);
-            triangle(right - 4, y + 11, 1, ACCENT);
+            ui_triangle(right - 4, y + 11, UI_RIGHT, ACCENT);
             font_draw(fv, right - 10 - tw, y + 18, value, ACCENT, 0);
-            triangle(right - 20 - tw, y + 11, 0, ACCENT);
+            ui_triangle(right - 20 - tw, y + 11, UI_LEFT, ACCENT);
         }
     }
     // Scroll hint when rows are hidden.
@@ -244,11 +238,8 @@ void settings_draw(void)
     float hy = SCREEN_H - 8;
     float x = SCREEN_W - 16 - ui_hint_width(fh, ICON_CIRCLE, "Back");
     ui_hint(fh, x, hy, ICON_CIRCLE, "Back", MUTED);
-    x -= 12 + font_width(fh, "Change", 0);
-    font_draw(fh, x, hy, "Change", MUTED, 0);
-    x -= 19;
-    triangle(x, hy - 7, 0, MUTED);
-    triangle(x + 6, hy - 7, 1, MUTED);
+    x -= 12 + ui_hint_arrows_width(fh, "Change");
+    ui_hint_arrows(fh, x, hy, 0, "Change", MUTED);
     x -= 12 + ui_hint_width(fh, ICON_CROSS, "Toggle");
     ui_hint(fh, x, hy, ICON_CROSS, "Toggle", MUTED);
     ui_volume(S(700, 10), HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);

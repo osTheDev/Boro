@@ -176,7 +176,8 @@ static void read_thumb_head(Video *v)
         v->duration_ms = h.duration_ms;
         v->width = h.width;
         v->height = h.height;
-        v->thumb = h.has_pixels ? 1 : -1;
+        // A thumbnail that failed before gets another try on each rescan.
+        v->thumb = h.has_pixels ? 1 : 0;
     }
     sceIoClose(fd);
 }
