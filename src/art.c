@@ -1,15 +1,12 @@
 #include "art.h"
 
-#include <stdio.h>
-#include <jpeglib.h>
-#include <png.h>
 #include <pspiofilemgr.h>
 #include <pspkernel.h>
-#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "image.h"
 #include "library.h"
 #include "tags.h"
 
@@ -42,78 +39,6 @@ static SceUID lock, wake;
 
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
-
-// ---- Decoding -----------------------------------------------------------
-
-typedef struct { struct jpeg_error_mgr mgr; jmp_buf jump; } JpegErr;
-
-static void jpeg_fail(j_common_ptr cinfo)
-{
-    longjmp(((JpegErr *)cinfo->err)->jump, 1);
-}
-
-// Decodes to tightly packed RGBA. Large JPEGs are scaled down while decoding.
-static u8 *decode_jpeg(const u8 *data, u32 size, int want, int *w, int *h)
-{
-    struct jpeg_decompress_struct cinfo;
-    JpegErr err;
-    u8 *volatile out = NULL;
-    cinfo.err = jpeg_std_error(&err.mgr);
-    err.mgr.error_exit = jpeg_fail;
-    if (setjmp(err.jump)) {
-        jpeg_destroy_decompress(&cinfo);
-        free(out);
-        return NULL;
-    }
-    jpeg_create_decompress(&cinfo);
-    jpeg_mem_src(&cinfo, (unsigned char *)data, size);
-    jpeg_read_header(&cinfo, TRUE);
-    int small = cinfo.image_width < cinfo.image_height ? cinfo.image_width : cinfo.image_height;
-    int denom = 8;
-    while (denom > 1 && small / denom < want) denom /= 2;
-    cinfo.scale_num = 1;
-    cinfo.scale_denom = denom;
-    cinfo.out_color_space = JCS_RGB;
-    jpeg_start_decompress(&cinfo);
-    *w = cinfo.output_width;
-    *h = cinfo.output_height;
-    out = malloc(*w * *h * 4);
-    u8 *row = malloc(*w * 3);
-    while (cinfo.output_scanline < cinfo.output_height) {
-        u8 *rows[1] = { row };
-        int y = cinfo.output_scanline;
-        jpeg_read_scanlines(&cinfo, rows, 1);
-        for (int x = 0; x < *w; x++) {
-            u8 *d = out + (y * *w + x) * 4;
-            d[0] = row[x * 3];
-            d[1] = row[x * 3 + 1];
-            d[2] = row[x * 3 + 2];
-            d[3] = 255;
-        }
-    }
-    free(row);
-    jpeg_finish_decompress(&cinfo);
-    jpeg_destroy_decompress(&cinfo);
-    return out;
-}
-
-static u8 *decode_png(const u8 *data, u32 size, int *w, int *h)
-{
-    png_image img;
-    memset(&img, 0, sizeof(img));
-    img.version = PNG_IMAGE_VERSION;
-    if (!png_image_begin_read_from_memory(&img, data, size)) return NULL;
-    img.format = PNG_FORMAT_RGBA;
-    u8 *out = malloc(PNG_IMAGE_SIZE(img));
-    if (!out || !png_image_finish_read(&img, NULL, out, 0, NULL)) {
-        png_image_free(&img);
-        free(out);
-        return NULL;
-    }
-    *w = img.width;
-    *h = img.height;
-    return out;
-}
 
 // Center-crops to a square, box-filters down to size and applies the
 // rounded-corner mask. Also returns the average color.
@@ -162,31 +87,14 @@ static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radiu
 static char file_paths[FILES][320];
 static int file_next;
 
-static u8 *read_file(const char *path, u32 *size)
-{
-    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
-    if (fd < 0) return NULL;
-    int n = sceIoLseek32(fd, 0, PSP_SEEK_END);
-    sceIoLseek32(fd, 0, PSP_SEEK_SET);
-    u8 *data = n > 0 && n <= 8 * 1024 * 1024 ? malloc(n) : NULL;
-    if (data && sceIoRead(fd, data, n) != n) { free(data); data = NULL; }
-    sceIoClose(fd);
-    *size = n;
-    return data;
-}
-
 static int decode_file(Job *j)
 {
     char path[320];
     take();
     snprintf(path, sizeof(path), "%s", file_paths[j->song - FILE_KEY]);
     give();
-    u32 size;
-    u8 *data = read_file(path, &size);
-    if (!data) return 0;
-    int w = 0, h = 0, png = size > 4 && data[0] == 0x89 && data[1] == 'P';
-    u8 *rgba = png ? decode_png(data, size, &w, &h) : decode_jpeg(data, size, kind_size[j->kind], &w, &h);
-    free(data);
+    int w = 0, h = 0;
+    u8 *rgba = image_load(path, kind_size[j->kind], &w, &h);
     if (!rgba) return 0;
     j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color);
     free(rgba);
@@ -206,8 +114,7 @@ static int decode(Job *j)
     sceIoClose(fd);
     int w = 0, h = 0;
     u8 *rgba = NULL;
-    if (ok) rgba = s->art_type == ART_JPEG ? decode_jpeg(data, s->art_size, kind_size[j->kind], &w, &h)
-                                           : decode_png(data, s->art_size, &w, &h);
+    if (ok) rgba = image_decode(data, s->art_size, kind_size[j->kind], &w, &h);
     free(data);
     if (!rgba) return 0;
     j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color);

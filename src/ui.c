@@ -64,6 +64,34 @@ static int radius_index(float r, float w, float h)
     return ri < 0 ? 0 : ri > MAX_RADIUS ? MAX_RADIUS : ri;
 }
 
+// Alpha masks that round off a corner, made once at 16px and scaled to r.
+static Texture *corner_mask(int which, int r)
+{
+    Texture *t = tex_create_alpha8(r, r);
+    u8 *px = (u8 *)t->px;
+    for (int y = 0; y < r; y++)
+        for (int x = 0; x < r; x++) {
+            float fx = which & 1 ? x + 0.5f : r - x - 0.5f, fy = which & 2 ? y + 0.5f : r - y - 0.5f;
+            float d = sqrtf(fx * fx + fy * fy) - r;
+            float a = d < -0.5f ? 0 : d > 0.5f ? 1 : d + 0.5f;
+            px[y * t->tw + x] = (u8)(a * 255);
+        }
+    tex_upload(t);
+    return t;
+}
+
+void ui_round_corners(float x, float y, float w, float h, int r, u32 bg)
+{
+    static Texture *corner[4];
+    if (!corner[0])
+        for (int i = 0; i < 4; i++) corner[i] = corner_mask(i, 16);
+    gfx_filter(1);
+    gfx_tex(corner[0], x, y, r, r, bg);
+    gfx_tex(corner[1], x + w - r, y, r, r, bg);
+    gfx_tex(corner[2], x, y + h - r, r, r, bg);
+    gfx_tex(corner[3], x + w - r, y + h - r, r, r, bg);
+}
+
 void ui_rrect(float x, float y, float w, float h, float r, u32 color)
 {
     if (w <= 0 || h <= 0) return;

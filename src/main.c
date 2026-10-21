@@ -17,6 +17,7 @@
 #include "stats.h"
 #include "video.h"
 #include "visual.h"
+#include "plib.h"
 #include "vlib.h"
 #include "volume.h"
 #include "player.h"
@@ -56,7 +57,7 @@ int main(int argc, char *argv[])
 {
     // argv[0] is like "ms0:/PSP/GAME/Boro/EBOOT.PBP": keep data next to the
     // EBOOT and read music from MUSIC on the same device.
-    char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC", video_dir[64] = "ms0:/VIDEO";
+    char data_dir[256] = "ms0:/PSP/GAME/Boro/data", music_dir[64] = "ms0:/MUSIC", video_dir[64] = "ms0:/VIDEO", picture_dir[64] = "ms0:/PICTURE";
     if (argc > 0 && argv[0] && strchr(argv[0], ':')) {
         snprintf(data_dir, sizeof(data_dir), "%s", argv[0]);
         char *slash = strrchr(data_dir, '/');
@@ -64,6 +65,7 @@ int main(int argc, char *argv[])
         int dev = strchr(argv[0], ':') - argv[0];
         snprintf(music_dir, sizeof(music_dir), "%.*s:/MUSIC", dev, argv[0]);
         snprintf(video_dir, sizeof(video_dir), "%.*s:/VIDEO", dev, argv[0]);
+        snprintf(picture_dir, sizeof(picture_dir), "%.*s:/PICTURE", dev, argv[0]);
     }
 
     sys_init();
@@ -78,6 +80,7 @@ int main(int argc, char *argv[])
     volume_init(app_dir);
     library_start(data_dir, music_dir);
     vlib_init(data_dir, video_dir);
+    plib_init(data_dir, picture_dir);
     home_init();
 
     u64 tick_res = sceRtcGetTickResolution(), last;
