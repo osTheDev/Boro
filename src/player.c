@@ -328,8 +328,16 @@ static int output_thread(SceSize args, void *argp)
         int rate = cur_rate;
         give();
         if (rate != channel_rate) {
-            if (channel_rate) sceAudioSRCChRelease();
-            sceAudioSRCChReserve(BLOCK, rate, 2);
+            // The channel refuses to close while the last block still plays,
+            // and a failed close leaves it at the old rate: a 48 kHz song then
+            // plays slow at 44.1 kHz. Wait for it to drain and retry.
+            if (channel_rate) {
+                for (int tries = 0; tries < 100; tries++) {
+                    if (sceAudioOutput2GetRestSample() <= 0 && sceAudioSRCChRelease() >= 0) break;
+                    sceKernelDelayThread(2000);
+                }
+            }
+            for (int tries = 0; tries < 100 && sceAudioSRCChReserve(BLOCK, rate, 2) < 0; tries++) sceKernelDelayThread(2000);
             channel_rate = rate;
         }
         sceKernelDcacheWritebackRange(out_buf, sizeof(out_bufs[0]));
