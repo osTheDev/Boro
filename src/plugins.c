@@ -229,6 +229,12 @@ int plugins_on_count(void)
     return n;
 }
 
+int plugins_hold_on(void)
+{
+    load();
+    return installed[HOLD] && enabled[HOLD];
+}
+
 static void step(int dir)
 {
     for (int i = sel + dir; i >= 0 && i < ROW_COUNT; i += dir)

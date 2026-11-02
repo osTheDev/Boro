@@ -8,6 +8,7 @@
 
 void plugins_enter(void);
 int plugins_on_count(void);              // plugins installed and turned on
+int plugins_hold_on(void);               // Hold+ is installed and on
 int plugins_update(const Input *in, float dt); // 1 to go back
 void plugins_draw(void);
 

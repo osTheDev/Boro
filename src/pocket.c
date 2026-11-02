@@ -8,6 +8,7 @@
 #include "font.h"
 #include "gfx.h"
 #include "player.h"
+#include "plugins.h"
 #include "ui.h"
 #include "volume.h"
 
@@ -73,7 +74,11 @@ int pocket_frame(Input *in, float dt)
 
     int hold = (in->held & PSP_CTRL_HOLD) != 0;
     if (hold && state == OPEN) {
-        state = music_playing() ? COUNTDOWN : LOCKED;
+        // With the Hold+ plugin on, it shows the lock card and turns the
+        // screen off, so Boro only stops reacting to buttons.
+        static int hold_plugin = -1;
+        if (hold_plugin < 0) hold_plugin = plugins_hold_on();
+        state = music_playing() && !hold_plugin ? COUNTDOWN : LOCKED;
         card_t = CARD_SECONDS;
     } else if (!hold && state != OPEN) {
         if (state == DARK) screen_power(1);
