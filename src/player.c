@@ -287,10 +287,17 @@ static s16 out_bufs[2][BLOCK * 2] __attribute__((aligned(64)));
 #define SCOPE 256
 static volatile s16 scope[SCOPE];
 
+// The hardware channel stays at one rate: switching it between songs proved
+// unreliable on the PSP (a 48 kHz song could keep playing at 44.1 kHz, about
+// 8% slow), so other rates are resampled here instead.
+#define OUT_RATE 44100
+
 static int output_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    int channel_rate = 0, which = 0;
+    int which = 0;
+    u32 frac = 0; // position between source frames, 16.16
+    sceAudioSRCChReserve(BLOCK, OUT_RATE, 2);
     for (;;) {
         if (paused) {
             sceKernelDelayThread(10000);
@@ -304,11 +311,13 @@ static int output_thread(SceSize args, void *argp)
             cur_rate = marks[0].rate;
             memmove(marks, marks + 1, --mark_count * sizeof(Marker));
         }
-        u32 avail = wr - rd, n = avail < BLOCK ? avail : BLOCK;
-        int finished = dec_index >= count;
+        u32 step = (u32)(((u64)(cur_rate ? cur_rate : OUT_RATE) << 16) / OUT_RATE);
+        u32 need = (u32)(((u64)BLOCK * step + frac) >> 16); // source frames a full block uses
+        u32 avail = wr - rd, n = avail < need ? avail : need;
+        int finished = dec_index >= count, boundary = 0;
         // Never mix two sample rates in one block.
-        if (mark_count && marks[0].start < rd + n && marks[0].rate != cur_rate) n = marks[0].start - rd;
-        else if (n < BLOCK && !finished) n = 0; // wait for a full block
+        if (mark_count && marks[0].start < rd + n && marks[0].rate != cur_rate) n = marks[0].start - rd, boundary = 1;
+        else if (n < need && !finished) n = 0; // wait for a full block
         if (n == 0) {
             if (finished && !mark_count && avail == 0 && cur_index >= 0 && flush_to < 0) cur_index = -1;
             give();
@@ -317,21 +326,27 @@ static int output_thread(SceSize args, void *argp)
         }
         s16 *out_buf = out_bufs[which];
         which ^= 1;
-        for (u32 i = 0; i < n; i++) {
-            u32 at = (rd + i) % RING;
-            out_buf[i * 2] = ring[at * 2];
-            out_buf[i * 2 + 1] = ring[at * 2 + 1];
+        u32 m = 0;
+        for (; m < BLOCK && (frac >> 16) < n; m++, frac += step) {
+            u32 i = frac >> 16, f = frac & 0xFFFF;
+            u32 at = (rd + i) % RING, nx = i + 1 < n ? (rd + i + 1) % RING : at;
+            for (int c = 0; c < 2; c++) {
+                int x = ring[at * 2 + c], y = ring[nx * 2 + c];
+                out_buf[m * 2 + c] = (s16)(x + (((y - x) * (int)f) >> 16));
+            }
         }
-        memset(out_buf + n * 2, 0, (BLOCK - n) * 4);
+        memset(out_buf + m * 2, 0, (BLOCK - m) * 4);
         for (int i = 0; i < SCOPE; i++) scope[i] = (out_buf[i * 2] + out_buf[i * 2 + 1]) / 2;
-        rd += n;
-        int rate = cur_rate;
-        give();
-        if (rate != channel_rate) {
-            if (channel_rate) sceAudioSRCChRelease();
-            sceAudioSRCChReserve(BLOCK, rate, 2);
-            channel_rate = rate;
+        u32 used = frac >> 16;
+        if (boundary || n < need) {
+            used = n;
+            frac = 0; // a new song starts on its first frame
+        } else {
+            if (used > n) used = n;
+            frac -= used << 16;
         }
+        rd += used;
+        give();
         sceKernelDcacheWritebackRange(out_buf, sizeof(out_bufs[0]));
         sceAudioSRCOutputBlocking((int)(PSP_AUDIO_VOLUME_MAX * gain), out_buf);
     }

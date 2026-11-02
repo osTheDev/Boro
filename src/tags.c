@@ -157,6 +157,12 @@ static int parse_stream(SceUID fd, u32 start, TrackInfo *t)
             int bitrate = kbps[mpeg1 ? 0 : 1][bri] * 1000;
             u32 frame_len = (mpeg1 ? 144 : 72) * bitrate / rate + pad;
             u32 frame_pos = base + i;
+            // A stray FF Ex byte pair in tags or art can pass for a header:
+            // only trust it when another frame with the same rate follows.
+            u8 nx[4];
+            sceIoLseek32(fd, frame_pos + frame_len, PSP_SEEK_SET);
+            if (frame_len < 24 || sceIoRead(fd, nx, 4) != 4 || nx[0] != 0xFF || (nx[1] & 0xFE) != (buf[i + 1] & 0xFE)
+                || ((nx[2] >> 2) & 3) != sri || nx[2] >> 4 == 0 || nx[2] >> 4 == 15) continue;
             t->sample_rate = rate;
             t->audio_start = frame_pos;
 
