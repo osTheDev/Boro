@@ -7,6 +7,7 @@
 #include <string.h>
 #include "about.h"
 #include "player.h"
+#include "plugins.h"
 #include "ui.h"
 #include "version.h"
 
@@ -103,21 +104,21 @@ void settings_frame(float dt)
 #define ACCENT HEX(0x6C8CFF, 255)
 #define TRACK HEX(0x3A3D48, 255)
 
-enum { ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_FIT, ROW_SLEEP, ROW_ABOUT, ROW_COUNT };
+enum { ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_FIT, ROW_SLEEP, ROW_PLUGINS, ROW_ABOUT, ROW_COUNT };
 static const char *const labels[ROW_COUNT] = {
     "Keep screen on", "Idle visualizer", "Visualizer starts after", "Visualizer style",
-    "Music theme", "Head unit color", "Resume videos", "Video picture", "Sleep timer", "About Boro",
+    "Music theme", "Head unit color", "Resume videos", "Video picture", "Sleep timer", "Plugins", "About Boro",
 };
 static const char *const helps[ROW_COUNT] = {
     "Screen stays lit while music plays. Off saves battery.", "Kicks in when no buttons are pressed", NULL, NULL,
-    NULL, NULL, "Pick up where you stopped", "How videos fill the screen. SELECT changes it while watching.", "Fades the music out, then pauses it", NULL,
+    NULL, NULL, "Pick up where you stopped", "How videos fill the screen. SELECT changes it while watching.", "Fades the music out, then pauses it", "Better Bright, Status, Hold+ and Snap", NULL,
 };
 
 #define ROW_Y 36
 #define ROW_H 28
 #define ROWS_SHOWN 7
 
-static int sel, top, in_about;
+static int sel, top, in_about, in_plugins, plugins_on;
 static float knob[ROW_COUNT];
 
 static Font *S(int weight, int px) { return ui_font(FAMILY_SORA, weight, px); }
@@ -134,7 +135,8 @@ static int *toggle_of(int row)
 
 void settings_enter(void)
 {
-    sel = top = in_about = 0;
+    sel = top = in_about = in_plugins = 0;
+    plugins_on = plugins_on_count();
     for (int i = 0; i < ROW_COUNT; i++) knob[i] = toggle_of(i) ? *toggle_of(i) : 0;
 }
 
@@ -169,6 +171,18 @@ int settings_update(const Input *in, float dt)
         if (p & PSP_CTRL_CIRCLE) in_about = 0;
         return 0;
     }
+    if (in_plugins) {
+        if (plugins_update(in, dt)) {
+            in_plugins = 0;
+            plugins_on = plugins_on_count();
+        }
+        return 0;
+    }
+    if (sel == ROW_PLUGINS && p & PSP_CTRL_CROSS) {
+        plugins_enter();
+        in_plugins = 1;
+        return 0;
+    }
     if (sel == ROW_ABOUT && p & PSP_CTRL_CROSS) {
         in_about = 1;
         return 0;
@@ -194,6 +208,7 @@ static void value_of(int row, char *out, int size)
     case ROW_FIT: snprintf(out, size, "%s", fit_names[settings.video_fit]); break;
     case ROW_DECK_COLOR: snprintf(out, size, "%s", deck_color_names[settings.deck_color]); break;
     case ROW_ABOUT: snprintf(out, size, "v%s", BORO_VERSION); break;
+    case ROW_PLUGINS: snprintf(out, size, "%d on", plugins_on); break;
     case ROW_SLEEP:
         if (!sleep_choice) snprintf(out, size, "Off");
         else snprintf(out, size, "%d min left", (int)((sleep_left + 59) / 60));
@@ -206,6 +221,10 @@ void settings_draw(void)
 {
     if (in_about) {
         about_draw();
+        return;
+    }
+    if (in_plugins) {
+        plugins_draw();
         return;
     }
     gfx_begin(BG);
@@ -247,7 +266,7 @@ void settings_draw(void)
             float tw = font_width(fv, value, 0);
             ui_triangle(right - 4, y + 11, UI_RIGHT, ACCENT);
             font_draw(fv, right - 10 - tw, y + 18, value, ACCENT, 0);
-            if (i != ROW_ABOUT) ui_triangle(right - 20 - tw, y + 11, UI_LEFT, ACCENT); // opens, doesn't cycle
+            if (i != ROW_ABOUT && i != ROW_PLUGINS) ui_triangle(right - 20 - tw, y + 11, UI_LEFT, ACCENT); // opens, doesn't cycle
         }
     }
     // Scroll hint when rows are hidden.
