@@ -8,17 +8,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include "avc.h"
+#include "image.h"
 #include "mp4.h"
 #include "settings.h"
 
 #define THUMB_W 160
 #define THUMB_H 90
 #define THUMB_MAGIC 0x32485442 // "BTH2": BTH1 files were made while decoding was broken
-#define LOADED 12              // thumbnail textures kept in memory
+#define LOADED 20              // thumbnail textures kept in memory (Home shows about 14)
 
 Video *videos;
 int video_count;
+Show *shows;
+int show_count;
+static int show_cap;
 
 static char data_dir[256], video_dir[256];
 static SceUID busy = -1;
@@ -32,6 +37,8 @@ static u32 use_clock;
 // Seconds since about 1997: fits a u32 for a long while.
 static u32 tick_seconds(u64 tick) { return (u32)(tick / 1000000 - 63000000000ULL); }
 static u32 now_seconds(void) { u64 t; sceRtcGetCurrentTick(&t); return tick_seconds(t); }
+
+static void count_watched(void);
 
 static u32 fnv(const char *s)
 {
@@ -97,6 +104,7 @@ void vlib_set_resume(int index, u32 ms)
     v->resume_ms = ms;
     v->watched = now_seconds();
     save_resume();
+    count_watched();
 }
 
 void vlib_set_fit(int index, int fit)
@@ -113,6 +121,159 @@ int vlib_continue(void)
     for (int i = 0; i < video_count; i++)
         if (videos[i].resume_ms && (best < 0 || videos[i].watched > videos[best].watched)) best = i;
     return best;
+}
+
+// ---- Shows --------------------------------------------------------------
+
+static void count_watched(void)
+{
+    for (int i = 0; i < show_count; i++) shows[i].watched = 0;
+    for (int i = 0; i < video_count; i++)
+        if (videos[i].show >= 0 && videos[i].watched && !videos[i].resume_ms) shows[videos[i].show].watched++;
+}
+
+static int cmp_episode(const void *a, const void *b)
+{
+    const Video *x = &videos[*(const int *)a], *y = &videos[*(const int *)b];
+    if (x->season != y->season) return x->season - y->season;
+    if (x->episode != y->episode) return x->episode - y->episode;
+    return strcasecmp(x->title, y->title);
+}
+
+int vlib_episodes(int show, int *out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < video_count && n < max; i++) if (videos[i].show == show) out[n++] = i;
+    qsort(out, n, sizeof(int), cmp_episode);
+    return n;
+}
+
+int vlib_next_up(int show)
+{
+    static int eps[512];
+    int n = vlib_episodes(show, eps, 512);
+    if (!n) return -1;
+    int last = -1;
+    for (int i = 0; i < n; i++) {
+        const Video *v = &videos[eps[i]];
+        if (!v->watched) continue;
+        if (last < 0 || v->watched > videos[eps[last]].watched) last = i;
+    }
+    if (last < 0) return eps[0];
+    if (videos[eps[last]].resume_ms && settings.resume_videos) return eps[last];
+    return eps[last + 1 < n ? last + 1 : last];
+}
+
+u32 vlib_last_used(int show)
+{
+    u32 best = 0;
+    for (int i = 0; i < video_count; i++) {
+        if (videos[i].show != show) continue;
+        u32 k = videos[i].watched > videos[i].modified ? videos[i].watched : videos[i].modified;
+        if (k > best) best = k;
+    }
+    return best;
+}
+
+// ---- Posters --------------------------------------------------------------
+
+#define POSTERS 16 // poster textures kept in memory
+
+typedef struct { u32 key; Texture *tex; u32 used; int state; } Poster; // state 1 loaded, -1 none
+static Poster posters[POSTERS];
+static u32 poster_clock;
+// Paths already found to have no poster, so they aren't looked for again.
+static u32 missing[256];
+static int missing_count;
+
+static void posters_forget(void)
+{
+    for (int i = 0; i < POSTERS; i++) posters[i].key = 0;
+    missing_count = 0;
+}
+
+// Center-crops and box-filters an RGBA picture into the poster texture.
+static void fill_poster(Texture *t, const u8 *px, int w, int h)
+{
+    float want = (float)POSTER_W / POSTER_H;
+    int cw = w, ch = h, cx = 0, cy = 0;
+    if ((float)w / h > want) { cw = h * want; cx = (w - cw) / 2; }
+    else { ch = w / want; cy = (h - ch) / 2; }
+    for (int y = 0; y < POSTER_H; y++) {
+        int y0 = cy + y * ch / POSTER_H, y1 = cy + (y + 1) * ch / POSTER_H;
+        if (y1 <= y0) y1 = y0 + 1;
+        for (int x = 0; x < POSTER_W; x++) {
+            int x0 = cx + x * cw / POSTER_W, x1 = cx + (x + 1) * cw / POSTER_W;
+            if (x1 <= x0) x1 = x0 + 1;
+            u32 r = 0, g = 0, b = 0, n = 0;
+            for (int yy = y0; yy < y1; yy++)
+                for (int xx = x0; xx < x1; xx++) {
+                    const u8 *c = px + (yy * w + xx) * 4;
+                    r += c[0]; g += c[1]; b += c[2]; n++;
+                }
+            t->px[y * t->tw + x] = (r / n) | (g / n) << 8 | (b / n) << 16 | 0xFF000000;
+        }
+    }
+    tex_upload(t);
+}
+
+// stem: a path without its extension; tries .jpg, .jpeg and .png.
+static const Texture *poster(const char *const stems[], int n)
+{
+    u32 key = fnv(stems[0]) | 1;
+    poster_clock++;
+    int slot = 0;
+    for (int i = 0; i < POSTERS; i++) {
+        if (posters[i].key == key) { posters[i].used = poster_clock; return posters[i].state > 0 ? posters[i].tex : NULL; }
+        if (posters[i].used < posters[slot].used) slot = i;
+    }
+    for (int i = 0; i < missing_count; i++) if (missing[i] == key) return NULL;
+    static const char *const ext[] = { ".jpg", ".jpeg", ".png", ".JPG", ".PNG" };
+    char path[300];
+    u8 *px = NULL;
+    int w = 0, h = 0;
+    for (int i = 0; i < n && !px; i++)
+        for (int e = 0; e < 5 && !px; e++) {
+            snprintf(path, sizeof(path), "%s%s", stems[i], ext[e]);
+            SceIoStat st;
+            if (sceIoGetstat(path, &st) < 0) continue;
+            px = image_load(path, POSTER_W * 2, &w, &h);
+        }
+    if (!px || w <= 0 || h <= 0) {
+        free(px);
+        if (missing_count < 256) missing[missing_count++] = key;
+        return NULL;
+    }
+    Poster *p = &posters[slot];
+    if (!p->tex) p->tex = tex_create(POSTER_W, POSTER_H);
+    fill_poster(p->tex, px, w, h);
+    free(px);
+    p->key = key;
+    p->used = poster_clock;
+    p->state = 1;
+    return p->tex;
+}
+
+const Texture *vlib_show_poster(int show)
+{
+    if (show < 0 || show >= show_count) return NULL;
+    char a[300], b[300], c[300];
+    snprintf(a, sizeof(a), "%s/cover", shows[show].dir);
+    snprintf(b, sizeof(b), "%s/poster", shows[show].dir);
+    snprintf(c, sizeof(c), "%s/folder", shows[show].dir);
+    const char *const stems[] = { a, b, c };
+    return poster(stems, 3);
+}
+
+const Texture *vlib_video_poster(int index)
+{
+    if (index < 0 || index >= video_count) return NULL;
+    char a[300];
+    snprintf(a, sizeof(a), "%s", videos[index].path);
+    char *dot = strrchr(a, '.');
+    if (dot) *dot = 0;
+    const char *const stems[] = { a };
+    return poster(stems, 1);
 }
 
 // ---- Scan ---------------------------------------------------------------
@@ -147,9 +308,71 @@ static int category_of(const char *name)
 
 static int cap;
 
-static void walk(const char *dir, int category, int depth)
+// A number after a word like "Season" or "Ep", or 0.
+static int number_after(const char *s, const char *const words[], int n)
 {
-    if (depth > 4) return;
+    for (const char *p = s; *p; p++) {
+        if (p != s && isalnum((u8)p[-1])) continue;
+        for (int i = 0; i < n; i++) {
+            int l = strlen(words[i]);
+            if (strncasecmp(p, words[i], l)) continue;
+            const char *q = p + l;
+            while (*q == ' ' || *q == '.' || *q == '_' || *q == '-') q++;
+            if (isdigit((u8)*q)) return atoi(q);
+        }
+    }
+    return 0;
+}
+
+// "Season 2", "Series 2" or "S2" as a folder name.
+static int season_of_folder(const char *name)
+{
+    static const char *const w[] = { "season", "series" };
+    int n = number_after(name, w, 2);
+    if (n) return n;
+    if ((name[0] == 'S' || name[0] == 's') && isdigit((u8)name[1])) return atoi(name + 1);
+    return 0;
+}
+
+// S01E03, 1x03, "Episode 3", "Ep 3" or "E03" in a file name.
+static void episode_of_name(const char *name, int *season, int *episode)
+{
+    for (const char *p = name; *p; p++) {
+        if (p != name && isalnum((u8)p[-1])) continue;
+        if ((*p == 'S' || *p == 's') && isdigit((u8)p[1])) {
+            char *e;
+            long sn = strtol(p + 1, &e, 10);
+            if ((*e == 'E' || *e == 'e') && isdigit((u8)e[1])) { *season = sn; *episode = atoi(e + 1); return; }
+        }
+        if (isdigit((u8)*p)) {
+            char *e;
+            long sn = strtol(p, &e, 10);
+            if ((*e == 'x' || *e == 'X') && isdigit((u8)e[1]) && sn < 100) { *season = sn; *episode = atoi(e + 1); return; }
+        }
+    }
+    static const char *const w[] = { "episode", "ep", "e" };
+    int n = number_after(name, w, 3);
+    if (n) *episode = n;
+}
+
+static int add_show(const char *name, const char *dir)
+{
+    if (show_count == show_cap) {
+        show_cap = show_cap ? show_cap * 2 : 16;
+        shows = realloc(shows, show_cap * sizeof(Show));
+    }
+    Show *s = &shows[show_count];
+    memset(s, 0, sizeof(*s));
+    snprintf(s->name, sizeof(s->name), "%s", name);
+    for (char *p = s->name; *p; p++) if (*p == '_') *p = ' ';
+    snprintf(s->dir, sizeof(s->dir), "%s", dir);
+    return show_count++;
+}
+
+// shows_root: dir is the Shows folder itself, so each folder in it is a show.
+static void walk(const char *dir, int category, int show, int season, int shows_root, int depth)
+{
+    if (depth > 5) return;
     SceUID d = sceIoDopen(dir);
     if (d < 0) return;
     SceIoDirent ent;
@@ -160,9 +383,17 @@ static void walk(const char *dir, int category, int depth)
         if (ent.d_name[0] == '.') continue;
         snprintf(path, sizeof(path), "%s/%s", dir, ent.d_name);
         if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
+            if (strlen(path) >= sizeof(shows->dir)) continue;
             // The first folder down with a known name decides, at any depth.
-            int c = category == VCAT_OTHER ? category_of(ent.d_name) : category;
-            walk(path, c, depth + 1);
+            if (category == VCAT_OTHER) {
+                int c = category_of(ent.d_name);
+                walk(path, c, -1, 0, c == VCAT_SHOWS, depth + 1);
+            } else if (shows_root) {
+                walk(path, category, add_show(ent.d_name, path), 0, 0, depth + 1);
+            } else {
+                int sn = show >= 0 ? season_of_folder(ent.d_name) : 0;
+                walk(path, category, show, sn ? sn : season, 0, depth + 1);
+            }
         } else if (is_mp4(ent.d_name) && strlen(path) < sizeof(videos->path)) {
             if (video_count == cap) {
                 cap = cap ? cap * 2 : 32;
@@ -174,6 +405,12 @@ static void walk(const char *dir, int category, int depth)
             v->fit = -1;
             make_title(v->title, sizeof(v->title), ent.d_name);
             v->category = category;
+            v->show = show;
+            if (show >= 0) {
+                v->season = season;
+                episode_of_name(ent.d_name, &v->season, &v->episode);
+                shows[show].count++;
+            }
             u64 tick = 0;
             sceRtcGetTick(&ent.d_stat.sce_st_mtime, &tick);
             v->modified = tick_seconds(tick);
@@ -205,9 +442,12 @@ void vlib_scan(void)
     vlib_thumbs(0);
     for (int i = 0; i < LOADED; i++) loaded[i].index = -1;
     video_count = 0;
-    walk(video_dir, VCAT_OTHER, 0);
+    show_count = 0;
+    posters_forget();
+    walk(video_dir, VCAT_OTHER, -1, 0, 0, 0);
     for (int i = 0; i < video_count; i++) read_thumb_head(&videos[i]);
     load_resume();
+    count_watched();
 }
 
 // ---- Thumbnails -----------------------------------------------------------
