@@ -20,6 +20,7 @@
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---- Settings ---------------------------------------------------------------
@@ -214,21 +215,44 @@ function Save-Jpeg([Drawing.Image]$img, [string]$path, [int]$max) {
     $bmp.Dispose()
 }
 
-# TVmaze's poster for a show, as a picture, or $null.
-function Find-Cover([string]$show) {
+# TVmaze's posters for a show, best first, as picture URLs. TVmaze's main
+# picture for a show is sometimes a still from an episode, so the proper
+# posters from its image list come first.
+function Find-Posters([string]$show) {
+    $urls = @()
     try {
         $q = [uri]::EscapeDataString($show)
         $r = Invoke-RestMethod -Uri "https://api.tvmaze.com/singlesearch/shows?q=$q" -TimeoutSec 8
-        $url = $r.image.original
-        if (-not $url) { $url = $r.image.medium }
-        if (-not $url) { return $null }
+        try {
+            $imgs = @(Invoke-RestMethod -Uri "https://api.tvmaze.com/shows/$($r.id)/images" -TimeoutSec 8)
+            $posters = @($imgs | Where-Object { $_.type -eq 'poster' } | Sort-Object { -not $_.main })
+            foreach ($p in $posters) {
+                $u = $p.resolutions.original.url; if (-not $u) { $u = $p.resolutions.medium.url }
+                if ($u) { $urls += $u }
+            }
+        } catch { }
+        # The main picture last: sometimes it's a still, not a poster.
+        $main = $r.image.original; if (-not $main) { $main = $r.image.medium }
+        if ($main -and $urls -notcontains $main) { $urls += $main }
+    } catch { Write-Log "No posters from TVmaze for '$show': $($_.Exception.Message)" }
+    return $urls
+}
+
+function Download-Image([string]$url) {
+    try {
         $tmp = Join-Path $WorkDir 'cover-download'
         Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 15
         return Load-Image $tmp
-    } catch {
-        Write-Log "No cover from TVmaze for '$show': $($_.Exception.Message)"
-        return $null
+    } catch { Write-Log "Couldn't download ${url}: $($_.Exception.Message)"; return $null }
+}
+
+# The best TVmaze poster for a show, as a picture, or $null.
+function Find-Cover([string]$show) {
+    foreach ($u in (Find-Posters $show)) {
+        $img = Download-Image $u
+        if ($img -and $img.Height -ge $img.Width) { return $img }   # skip landscape stills
     }
+    return $null
 }
 
 function Has-Cover([string]$show) {
@@ -448,7 +472,8 @@ $FileList.CheckOnClick = $true; $FileList.IntegralHeight = $false
 $P1.Controls.Add($FileList)
 $Untick = New-Label 'Untick any you want to leave alone.' 0 220; $Untick.ForeColor = $Dim; $P1.Controls.Add($Untick)
 $OutLabel = New-Label '' 0 242 366; $OutLabel.Size = New-Object Drawing.Size(366, 32); $P1.Controls.Add($OutLabel)
-$Remember = New-Label "I'll remember this folder for next time." 0 280; $Remember.ForeColor = $Dim; $P1.Controls.Add($Remember)
+$Remember = New-Label "I'll remember this folder for next time." 0 280 250; $Remember.ForeColor = $Dim; $P1.Controls.Add($Remember)
+$CoversBtn = New-Button 'Show covers...' 260 276 100; $P1.Controls.Add($CoversBtn)
 $Files = @()     # full paths, in list order
 
 function Fill-Files {
@@ -484,6 +509,119 @@ $BrowseBtn.Add_Click({
     Update-Nav
 })
 # ItemCheck fires before the tick changes, so count the one changing.
+# ---- Show covers: fix the posters of shows you already have ----
+$EpisodeName = '(?i)(s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{2,3}\b|(^|[\s._\-])(episode|ep|e)[\s._\-]*\d{1,3}\b)'
+
+# Show folders under a folder, at any depth: season folders inside, or two or
+# more numbered episodes (the same rule Boro uses).
+function Find-ShowFolders([string]$root, [int]$depth = 0) {
+    $out = @()
+    if ($depth -gt 5) { return $out }
+    foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name.StartsWith('.')) { continue }
+        $seasons = @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(?i)(season|series)\s*\d+$|^[sS]\d+$' }).Count
+        $eps = @(Get-ChildItem -LiteralPath $d.FullName -File -ErrorAction SilentlyContinue |
+            Where-Object { $VideoExts -contains $_.Extension.ToLower() -and $_.Name -match $EpisodeName }).Count
+        if ($seasons -gt 0 -or $eps -ge 2) { $out += $d.FullName }
+        else { $out += Find-ShowFolders $d.FullName ($depth + 1) }
+    }
+    return $out
+}
+
+function Show-CoversDialog {
+    $dlg = New-Object Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Pick the folder your shows are in. The VIDEO folder on the memory stick works too.'
+    if ($script:Folder) { $dlg.SelectedPath = $script:Folder }
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor
+    $found = @(Find-ShowFolders $dlg.SelectedPath | Sort-Object { Split-Path $_ -Leaf })
+    $Form.Cursor = [Windows.Forms.Cursors]::Default
+    if (-not $found.Count) {
+        [Windows.Forms.MessageBox]::Show('No show folders in there.', 'Boro Video Wizard', 'OK', 'Information') | Out-Null
+        return
+    }
+
+    $d = New-Object Windows.Forms.Form
+    $d.Text = 'Show covers'; $d.ClientSize = New-Object Drawing.Size(430, 300)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'; $d.BackColor = $Gray; $d.Font = $Font
+    $d.Controls.Add((New-Label 'Shows:' 10 8 180 $Bold))
+    $list = New-Object Windows.Forms.ListBox
+    $list.Location = New-Object Drawing.Point(10, 26); $list.Size = New-Object Drawing.Size(190, 230); $list.IntegralHeight = $false
+    $d.Controls.Add($list)
+    $pic = New-Object Windows.Forms.PictureBox
+    $pic.Location = New-Object Drawing.Point(212, 26); $pic.Size = New-Object Drawing.Size(120, 180)
+    $pic.BorderStyle = 'Fixed3D'; $pic.SizeMode = 'Zoom'; $pic.BackColor = [Drawing.Color]::White
+    $d.Controls.Add($pic)
+    $info = New-Label '' 212 210 210; $info.ForeColor = $Dim; $d.Controls.Add($info)
+    $prev = New-Button '<' 340 26 24; $d.Controls.Add($prev)
+    $next = New-Button '>' 368 26 24; $d.Controls.Add($next)
+    $search = New-Button 'Search as...' 340 54 82; $d.Controls.Add($search)
+    $own = New-Button 'My own...' 340 82 82; $d.Controls.Add($own)
+    $save = New-Button 'Save cover' 340 130 82; $d.Controls.Add($save)
+    $hint = New-Label 'Saved as cover.jpg in the show folder.' 10 262 300; $hint.ForeColor = $Dim; $d.Controls.Add($hint)
+    $close = New-Button 'Close' 345 268 75; $close.DialogResult = 'Cancel'; $d.Controls.Add($close); $d.CancelButton = $close
+
+    # Per show: the poster URLs, which one is showing, and the picture on screen.
+    $st = @{ Urls = @(); At = 0; Img = $null; Label = '' }
+    $label = {
+        param($dir)
+        $n = Split-Path $dir -Leaf
+        if (Test-Path -LiteralPath (Join-Path $dir 'cover.jpg')) { "$n   (has cover)" } else { $n }
+    }
+    foreach ($f in $found) { [void]$list.Items.Add((& $label $f)) }
+
+    $showOne = {
+        if (-not $st.Urls.Count) { $pic.Image = $st.Img; $info.Text = $st.Label; return }
+        $d.Cursor = [Windows.Forms.Cursors]::WaitCursor
+        $st.Img = Download-Image $st.Urls[$st.At]
+        $d.Cursor = [Windows.Forms.Cursors]::Default
+        $pic.Image = $st.Img
+        $info.Text = "TVmaze poster $($st.At + 1) of $($st.Urls.Count)"
+    }
+    $lookUp = {
+        param($name)
+        $d.Cursor = [Windows.Forms.Cursors]::WaitCursor; $info.Text = 'Looking on TVmaze...'; $d.Refresh()
+        $st.Urls = @(Find-Posters $name); $st.At = 0; $st.Img = $null
+        $d.Cursor = [Windows.Forms.Cursors]::Default
+        if (-not $st.Urls.Count) { $st.Label = "TVmaze doesn't know '$name'. Try Search as..." }
+        & $showOne
+    }
+    $list.Add_SelectedIndexChanged({
+        if ($list.SelectedIndex -lt 0) { return }
+        $dir = $found[$list.SelectedIndex]
+        $cur = Join-Path $dir 'cover.jpg'
+        $pic.Image = $null
+        & $lookUp (Clean-Name (Split-Path $dir -Leaf))
+        if (-not $st.Urls.Count -and (Test-Path -LiteralPath $cur)) { $st.Img = Load-Image $cur; $pic.Image = $st.Img; $info.Text = 'Its cover now' }
+    })
+    $prev.Add_Click({ if ($st.Urls.Count) { $st.At = ($st.At + $st.Urls.Count - 1) % $st.Urls.Count; & $showOne } })
+    $next.Add_Click({ if ($st.Urls.Count) { $st.At = ($st.At + 1) % $st.Urls.Count; & $showOne } })
+    $search.Add_Click({
+        if ($list.SelectedIndex -lt 0) { return }
+        $name = [Microsoft.VisualBasic.Interaction]::InputBox('Search TVmaze for:', 'Show covers', (Clean-Name (Split-Path $found[$list.SelectedIndex] -Leaf)))
+        if ($name.Trim()) { & $lookUp $name.Trim() }
+    })
+    $own.Add_Click({
+        $img = Pick-Picture
+        if ($img) { $st.Urls = @(); $st.Img = $img; $st.Label = 'Your picture'; & $showOne }
+    })
+    $save.Add_Click({
+        if ($list.SelectedIndex -lt 0 -or -not $st.Img) { return }
+        $dir = $found[$list.SelectedIndex]
+        try {
+            Save-Jpeg $st.Img (Join-Path $dir 'cover.jpg') 400
+            $list.Items[$list.SelectedIndex] = (& $label $dir)
+            $info.Text = 'Saved.'
+            Write-Log "Cover saved for $dir"
+        } catch { $info.Text = "Couldn't save: $($_.Exception.Message)" }
+    })
+    $list.SelectedIndex = 0
+    [void]$d.ShowDialog($Form)
+}
+$CoversBtn.Add_Click({ Show-CoversDialog })
+
 $FileList.Add_ItemCheck({
     param($s, $e)
     $n = $FileList.CheckedIndices.Count
