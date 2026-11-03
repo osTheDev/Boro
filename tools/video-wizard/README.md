@@ -18,12 +18,16 @@ them a poster, and it converts and files them the way Boro sorts them.
    `BoroWizard.settings.txt`). Untick any you want to leave alone.
 2. **What are they?** Each video gets a shelf and a name, guessed from the file
    name. Click a row to fix it. Red rows still need something.
+   For a batch of episodes: **Select all** (or Ctrl/Shift-click rows), pick
+   TV episode and type the show once, then **Number 1, 2, 3...** numbers them
+   down the list and **Titles from TVmaze** fills in the episode names.
    - **Movie** -> `VIDEO\Movies\<Title>.mp4`
    - **TV episode** -> `VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Title>.mp4`
    - **Music video** -> `VIDEO\Music\<Artist - Song>.mp4`
    - **Clip** -> `VIDEO\Clips\<Title>.mp4` (shows up in Boro's Photos)
 3. **Poster.** For each video pick a frame from it (the arrows step further
-   in), your own picture, or none. It's saved as `<name>.jpg` next to the video
+   in), your own picture, or none. **Frames for the rest** skips ahead and
+   gives every remaining video a frame from about 10% in. It's saved as `<name>.jpg` next to the video
    and Boro shows it on the video's tile. The first episode of a show that has
    no cover yet also asks for the show's cover (TVmaze, your own, or none),
    saved as the show's `cover.jpg`.

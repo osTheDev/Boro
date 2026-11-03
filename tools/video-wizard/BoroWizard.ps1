@@ -413,6 +413,7 @@ $StepLabel = New-Label '' 12 334 100; $StepLabel.ForeColor = $Dim; $Form.Control
 $BackBtn = New-Button '< Back' 275 330; $Form.Controls.Add($BackBtn)
 $NextBtn = New-Button 'Next >' 356 330; $Form.Controls.Add($NextBtn)
 $CancelBtn = New-Button 'Cancel' 437 330; $Form.Controls.Add($CancelBtn)
+$RestBtn = New-Button 'Frames for the rest >>' 150 330 120; $RestBtn.Visible = $false; $Form.Controls.Add($RestBtn)
 
 $All   = @{}                                        # path -> item, so edits survive going back
 $Items = New-Object System.Collections.ArrayList    # the ticked videos, in order
@@ -482,11 +483,15 @@ $FileList.Add_ItemCheck({
 $P2 = New-Page
 $P2.Controls.Add((New-Label 'What are they?' 0 4 366 $Head))
 $Table = New-Object Windows.Forms.ListView
-$Table.Location = New-Object Drawing.Point(0, 28); $Table.Size = New-Object Drawing.Size(360, 92)
+$Table.Location = New-Object Drawing.Point(0, 26); $Table.Size = New-Object Drawing.Size(360, 76)
 $Table.View = 'Details'; $Table.FullRowSelect = $true; $Table.HideSelection = $false; $Table.MultiSelect = $true
 $Table.HeaderStyle = 'Nonclickable'
 [void]$Table.Columns.Add('File', 130); [void]$Table.Columns.Add('Shelf', 46); [void]$Table.Columns.Add('Name in Boro', 162)
 $P2.Controls.Add($Table)
+# Batch tools: they work on the selected rows, or every TV row when one or none is selected.
+$AllBtn = New-Button 'Select all' 0 104 64 19; $P2.Controls.Add($AllBtn)
+$NumberBtn = New-Button 'Number 1, 2, 3...' 68 104 104 19; $P2.Controls.Add($NumberBtn)
+$TitlesBtn = New-Button 'Titles from TVmaze' 176 104 120 19; $P2.Controls.Add($TitlesBtn)
 $P2.Controls.Add((New-Label 'Shelf:' 0 126 366 $Bold))
 $Radios = @()
 $rx = @(0, 62, 152, 252)
@@ -511,8 +516,8 @@ $TitleLabel = New-Label 'Title:' 0 208 366 $Bold; $P2.Controls.Add($TitleLabel)
 $TitleBox = New-Object Windows.Forms.TextBox
 $TitleBox.Location = New-Object Drawing.Point(0, 224); $TitleBox.Size = New-Object Drawing.Size(360, 21)
 $P2.Controls.Add($TitleBox)
-$ShowsAs = New-Label '' 0 252 366; $P2.Controls.Add($ShowsAs)
-$Hint = New-Label 'I guessed from the file names. Click a row to fix it (Ctrl/Shift for several).' 0 272; $Hint.ForeColor = $Dim; $P2.Controls.Add($Hint)
+$ShowsAs = New-Label '' 0 250 366; $P2.Controls.Add($ShowsAs)
+$Hint = New-Label 'Guessed from file names. Ctrl/Shift-click to edit several.' 0 272; $Hint.ForeColor = $Dim; $P2.Controls.Add($Hint)
 $RedNote = New-Label 'Red = still needs something.' 0 288; $RedNote.ForeColor = $Red; $P2.Controls.Add($RedNote)
 
 function Selected-Item { if ($Table.SelectedItems.Count) { return $Table.SelectedItems[0].Tag }; return $null }
@@ -603,6 +608,69 @@ function Save-Editor([string]$field) {
 }
 
 $Table.Add_SelectedIndexChanged({ Load-Editor })
+$Table.Add_KeyDown({
+    param($s, $e)
+    if ($e.Control -and $e.KeyCode -eq 'A') { foreach ($row in $Table.Items) { $row.Selected = $true }; $e.Handled = $true }
+})
+
+# The rows a batch tool works on.
+function Batch-Rows([bool]$tvOnly) {
+    $rows = Selected-Rows
+    if ($rows.Count -lt 2) { $rows = @($Table.Items | ForEach-Object { $_ }) }
+    if ($tvOnly) { $rows = @($rows | Where-Object { $_.Tag.Shelf -eq 1 }) }
+    return $rows
+}
+
+$AllBtn.Add_Click({ foreach ($row in $Table.Items) { $row.Selected = $true }; $Table.Focus() | Out-Null })
+
+# Episodes numbered down the list, per show and season, from the first one's number.
+$NumberBtn.Add_Click({
+    $next = @{}
+    foreach ($row in (Batch-Rows $true)) {
+        $it = $row.Tag
+        $k = '{0}|{1}' -f (Safe-Name $it.Show).ToLower(), $it.Season
+        if (-not $next.ContainsKey($k)) { $next[$k] = [int]$it.Episode }
+        $it.Episode = $next[$k]; $next[$k]++
+        Update-Row $row
+    }
+    Load-Editor
+})
+
+$EpisodeLists = @{}     # lower-case show -> @{ 'SxE' = name }, or $null if TVmaze didn't know it
+function Find-Episodes([string]$show) {
+    $k = $show.ToLower()
+    if ($EpisodeLists.ContainsKey($k)) { return $EpisodeLists[$k] }
+    $map = $null
+    try {
+        $q = [uri]::EscapeDataString($show)
+        $r = Invoke-RestMethod -Uri "https://api.tvmaze.com/singlesearch/shows?q=$q&embed=episodes" -TimeoutSec 10
+        $map = @{}
+        foreach ($e in $r._embedded.episodes) { if ($e.number) { $map["$($e.season)x$($e.number)"] = [string]$e.name } }
+    } catch { Write-Log "No episode list from TVmaze for '$show': $($_.Exception.Message)" }
+    $EpisodeLists[$k] = $map
+    return $map
+}
+
+$TitlesBtn.Add_Click({
+    $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor
+    $got = 0; $missed = @()
+    foreach ($row in (Batch-Rows $true)) {
+        $it = $row.Tag
+        $show = $it.Show.Trim()
+        if (-not $show) { continue }
+        $map = Find-Episodes $show
+        $key = "$($it.Season)x$($it.Episode)"
+        if ($map -and $map.ContainsKey($key) -and $map[$key]) { $it.Title = Safe-Name $map[$key]; $got++; Update-Row $row }
+        elseif (-not $map) { if ($missed -notcontains $show) { $missed += $show } }
+    }
+    $Form.Cursor = [Windows.Forms.Cursors]::Default
+    Load-Editor
+    if ($missed.Count) {
+        [Windows.Forms.MessageBox]::Show("TVmaze didn't know: $($missed -join ', ').`nCheck the show name and try again.", 'Boro Video Wizard', 'OK', 'Information') | Out-Null
+    } elseif (-not $got) {
+        [Windows.Forms.MessageBox]::Show("No titles found. Check the season and episode numbers.", 'Boro Video Wizard', 'OK', 'Information') | Out-Null
+    }
+})
 foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor 'shelf' } }) }
 $ShowBox.Add_TextChanged({ Save-Editor 'show' }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor 'show' })
 $SeasonBox.Add_ValueChanged({ Save-Editor 'season' }); $EpBox.Add_ValueChanged({ Save-Editor 'episode' })
@@ -864,6 +932,8 @@ function File-Item($it, [string]$converted) {
     $dest = Unique-Path (Target-Path $it)
     New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
     Move-Item -LiteralPath $converted -Destination $dest
+    # Posters never looked at (Frames for the rest) are grabbed now.
+    if ($it.Poster -eq 'frame' -and -not $it.NoFrames -and -not $it.Frames.ContainsKey($it.FramePage)) { Get-Frames $it $it.FramePage }
     $img = Poster-Image $it
     if ($img) {
         try { Save-Jpeg $img ([IO.Path]::ChangeExtension($dest, '.jpg')) 480 }
@@ -871,6 +941,7 @@ function File-Item($it, [string]$converted) {
     }
     if ($it.Shelf -eq 1) {
         $cv = Cover-For $it.Show
+        if (-not $cv.Asked -and -not (Has-Cover $it.Show)) { $cv.Asked = $true; $cv.Img = Find-Cover $it.Show.Trim() }
         $coverPath = Join-Path (Split-Path (Split-Path $dest)) 'cover.jpg'
         if ($cv.Img -and -not (Has-Cover $it.Show)) {
             try { Save-Jpeg $cv.Img $coverPath 400 } catch { Write-Log "Couldn't save $coverPath" }
@@ -976,8 +1047,11 @@ function Update-Nav {
             } else { $NextBtn.Text = 'More...'; $CancelBtn.Text = 'Close' }
         }
     }
+    $RestBtn.Visible = $script:Step -eq 3 -and $script:PosterAt -lt $Items.Count - 1
     $Form.AcceptButton = $null
 }
+# Skips the poster pages left: each of those videos gets a frame from about 10% in.
+$RestBtn.Add_Click({ Go 4; Start-Brew; Update-Nav })
 
 function Go([int]$step) {
     $script:Step = $step
