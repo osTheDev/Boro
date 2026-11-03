@@ -112,8 +112,18 @@ function New-Item-For([string]$path) {
         $it.Episode = [Math]::Max(1, [Math]::Min(999, [int]$Matches[3]))
         $it.Title = Clean-Name (" " + $Matches[4])
         $it.EpGuessed = $true
+        if (-not $it.Show) { $it.Show = Clean-Name (Split-Path (Split-Path $path) -Leaf) }
         $known = Existing-Shows | Where-Object { $_ -ieq $it.Show } | Select-Object -First 1
         if ($known) { $it.Show = $known }
+        return $it
+    }
+    # Just "Episode 2" / "Ep 02" / "E02": the folder is usually named after the show.
+    if ($base -match '^(?:episode|ep|e)[\s._\-]*(\d{1,3})\b[\s._\-]*(.*)$') {
+        $it.Shelf = 1
+        $it.Show = Clean-Name (Split-Path (Split-Path $path) -Leaf)
+        $it.Episode = [Math]::Max(1, [int]$Matches[1])
+        $it.Title = Clean-Name (" " + $Matches[2])
+        $it.EpGuessed = $true
         return $it
     }
     # "Show - Episode 3 - Title", "Show Ep 03", "Show E03"
@@ -123,6 +133,7 @@ function New-Item-For([string]$path) {
         $it.Episode = [Math]::Max(1, [int]$Matches[2])
         $it.Title = Clean-Name (" " + $Matches[3])
         $it.EpGuessed = $true
+        if (-not $it.Show) { $it.Show = Clean-Name (Split-Path (Split-Path $path) -Leaf) }
         $known = Existing-Shows | Where-Object { $_ -ieq $it.Show } | Select-Object -First 1
         if ($known) { $it.Show = $known }
         return $it
@@ -448,7 +459,8 @@ function Fill-Files {
     }
     $FolderBox.Text = $script:Folder
     $vids = @(Get-ChildItem -LiteralPath $script:Folder -File -ErrorAction SilentlyContinue |
-        Where-Object { $VideoExts -contains $_.Extension.ToLower() } | Sort-Object Name)
+        Where-Object { $VideoExts -contains $_.Extension.ToLower() } |
+        Sort-Object { [regex]::Replace($_.Name, '\d+', { $args[0].Value.PadLeft(8, '0') }) })
     foreach ($v in $vids) {
         $size = if ($v.Length -ge 1GB) { '{0:0.0} GB' -f ($v.Length / 1GB) } else { '{0:0} MB' -f [Math]::Max(1, $v.Length / 1MB) }
         [void]$FileList.Items.Add(("{0}    ({1})" -f $v.Name, $size), $true)
@@ -489,9 +501,8 @@ $Table.HeaderStyle = 'Nonclickable'
 [void]$Table.Columns.Add('File', 130); [void]$Table.Columns.Add('Shelf', 46); [void]$Table.Columns.Add('Name in Boro', 162)
 $P2.Controls.Add($Table)
 # Batch tools: they work on the selected rows, or every TV row when one or none is selected.
-$AllBtn = New-Button 'Select all' 0 104 64 19; $P2.Controls.Add($AllBtn)
-$NumberBtn = New-Button 'Number 1, 2, 3...' 68 104 104 19; $P2.Controls.Add($NumberBtn)
-$TitlesBtn = New-Button 'Titles from TVmaze' 176 104 120 19; $P2.Controls.Add($TitlesBtn)
+$TvBtn = New-Button 'Make them a TV show...' 0 104 150 19; $P2.Controls.Add($TvBtn)
+$TvNote = New-Label 'All rows, or just the ones you select.' 156 106 210; $TvNote.ForeColor = $Dim; $P2.Controls.Add($TvNote)
 $P2.Controls.Add((New-Label 'Shelf:' 0 126 366 $Bold))
 $Radios = @()
 $rx = @(0, 62, 152, 252)
@@ -597,8 +608,8 @@ function Save-Editor([string]$field) {
                 if ($it.Shelf -eq 1 -and $was -ne 1 -and $rows.Count -gt 1 -and -not $it.EpGuessed) { $n++; $it.Episode = $n }
                 if ($it.Shelf -eq 1 -and $was -ne 1 -and $rows.Count -gt 1 -and $ShowBox.Text.Trim()) { $it.Show = $ShowBox.Text }
             }
-            'show'    { $it.Show = $ShowBox.Text }
-            'season'  { $it.Season = [int]$SeasonBox.Value }
+            'show'    { $it.Show = $ShowBox.Text; $it.Shelf = 1 }
+            'season'  { $it.Season = [int]$SeasonBox.Value; $it.Shelf = 1 }
             'episode' { if ($rows.Count -eq 1) { $it.Episode = [int]$EpBox.Value } }
             'title'   { if ($rows.Count -eq 1) { $it.Title = $TitleBox.Text } }
         }
@@ -621,21 +632,6 @@ function Batch-Rows([bool]$tvOnly) {
     return $rows
 }
 
-$AllBtn.Add_Click({ foreach ($row in $Table.Items) { $row.Selected = $true }; $Table.Focus() | Out-Null })
-
-# Episodes numbered down the list, per show and season, from the first one's number.
-$NumberBtn.Add_Click({
-    $next = @{}
-    foreach ($row in (Batch-Rows $true)) {
-        $it = $row.Tag
-        $k = '{0}|{1}' -f (Safe-Name $it.Show).ToLower(), $it.Season
-        if (-not $next.ContainsKey($k)) { $next[$k] = [int]$it.Episode }
-        $it.Episode = $next[$k]; $next[$k]++
-        Update-Row $row
-    }
-    Load-Editor
-})
-
 $EpisodeLists = @{}     # lower-case show -> @{ 'SxE' = name }, or $null if TVmaze didn't know it
 function Find-Episodes([string]$show) {
     $k = $show.ToLower()
@@ -651,26 +647,68 @@ function Find-Episodes([string]$show) {
     return $map
 }
 
-$TitlesBtn.Add_Click({
-    $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor
-    $got = 0; $missed = @()
-    foreach ($row in (Batch-Rows $true)) {
+# One dialog sets up a batch of episodes: show, season, numbers and titles.
+function Show-TvDialog {
+    $rows = Batch-Rows $false
+    if (-not $rows.Count) { return }
+    $d = New-Object Windows.Forms.Form
+    $d.Text = 'Make them a TV show'; $d.ClientSize = New-Object Drawing.Size(300, 214)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'; $d.BackColor = $Gray; $d.Font = $Font
+    $d.Controls.Add((New-Label "These $($rows.Count) videos are episodes of:" 10 10 280 $Bold))
+    $show = New-Object Windows.Forms.ComboBox
+    $show.Location = New-Object Drawing.Point(10, 30); $show.Size = New-Object Drawing.Size(280, 21)
+    foreach ($x in $ShowBox.Items) { [void]$show.Items.Add($x) }
+    $first = $rows | ForEach-Object { $_.Tag } | Where-Object { $_.Show.Trim() } | Select-Object -First 1
+    $show.Text = $(if ($first) { $first.Show.Trim() } else { Split-Path $script:Folder -Leaf })
+    $d.Controls.Add($show)
+    $d.Controls.Add((New-Label 'Season:' 10 62 60))
+    $season = New-Object Windows.Forms.NumericUpDown
+    $season.Location = New-Object Drawing.Point(70, 60); $season.Size = New-Object Drawing.Size(50, 21); $season.Minimum = 1; $season.Maximum = 99
+    $season.Value = [Math]::Max(1, [int]$rows[0].Tag.Season)
+    $d.Controls.Add($season)
+    $guessed = -not ($rows | Where-Object { -not $_.Tag.EpGuessed })
+    $keep = New-Object Windows.Forms.RadioButton
+    $keep.Text = 'Episode numbers from the file names'; $keep.Location = New-Object Drawing.Point(10, 90); $keep.AutoSize = $true
+    $keep.Enabled = $guessed; $keep.Checked = $guessed
+    $d.Controls.Add($keep)
+    $count = New-Object Windows.Forms.RadioButton
+    $count.Text = 'Number them in list order, from'; $count.Location = New-Object Drawing.Point(10, 112); $count.AutoSize = $true
+    $count.Checked = -not $guessed
+    $d.Controls.Add($count)
+    $start = New-Object Windows.Forms.NumericUpDown
+    $start.Location = New-Object Drawing.Point(206, 110); $start.Size = New-Object Drawing.Size(50, 21); $start.Minimum = 1; $start.Maximum = 999
+    $d.Controls.Add($start)
+    $titles = New-Object Windows.Forms.CheckBox
+    $titles.Text = 'Get episode titles from TVmaze'; $titles.Location = New-Object Drawing.Point(10, 142); $titles.AutoSize = $true; $titles.Checked = $true
+    $d.Controls.Add($titles)
+    $ok = New-Button 'OK' 134 180; $ok.DialogResult = 'OK'; $d.Controls.Add($ok); $d.AcceptButton = $ok
+    $no = New-Button 'Cancel' 215 180; $no.DialogResult = 'Cancel'; $d.Controls.Add($no); $d.CancelButton = $no
+    if ($d.ShowDialog($Form) -ne 'OK' -or -not $show.Text.Trim()) { return }
+
+    $name = $show.Text.Trim()
+    $known = Existing-Shows | Where-Object { $_ -ieq $name } | Select-Object -First 1
+    if ($known) { $name = $known }
+    $map = $null
+    if ($titles.Checked) { $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor; $map = Find-Episodes $name; $Form.Cursor = [Windows.Forms.Cursors]::Default }
+    $n = [int]$start.Value
+    foreach ($row in $rows) {
         $it = $row.Tag
-        $show = $it.Show.Trim()
-        if (-not $show) { continue }
-        $map = Find-Episodes $show
+        $it.Shelf = 1; $it.Show = $name; $it.Season = [int]$season.Value
+        if ($count.Checked) { $it.Episode = $n; $n++ }
         $key = "$($it.Season)x$($it.Episode)"
-        if ($map -and $map.ContainsKey($key) -and $map[$key]) { $it.Title = Safe-Name $map[$key]; $got++; Update-Row $row }
-        elseif (-not $map) { if ($missed -notcontains $show) { $missed += $show } }
+        if ($map -and $map.ContainsKey($key) -and $map[$key]) { $it.Title = Safe-Name $map[$key] }
+        elseif ($it.Title -match '^(?i)(episode|ep|e)\s*\d+$') { $it.Title = '' }   # "Episode 2" says nothing new
+        Update-Row $row
     }
-    $Form.Cursor = [Windows.Forms.Cursors]::Default
+    if (-not $ShowBox.Items.Contains($name)) { [void]$ShowBox.Items.Add($name) }
     Load-Editor
-    if ($missed.Count) {
-        [Windows.Forms.MessageBox]::Show("TVmaze didn't know: $($missed -join ', ').`nCheck the show name and try again.", 'Boro Video Wizard', 'OK', 'Information') | Out-Null
-    } elseif (-not $got) {
-        [Windows.Forms.MessageBox]::Show("No titles found. Check the season and episode numbers.", 'Boro Video Wizard', 'OK', 'Information') | Out-Null
+    if ($titles.Checked -and -not $map) {
+        [Windows.Forms.MessageBox]::Show("TVmaze didn't know '$name', so the episodes have no titles. That's fine: Boro shows their numbers.",
+            'Boro Video Wizard', 'OK', 'Information') | Out-Null
     }
-})
+}
+$TvBtn.Add_Click({ Show-TvDialog })
 foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor 'shelf' } }) }
 $ShowBox.Add_TextChanged({ Save-Editor 'show' }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor 'show' })
 $SeasonBox.Add_ValueChanged({ Save-Editor 'season' }); $EpBox.Add_ValueChanged({ Save-Editor 'episode' })

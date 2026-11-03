@@ -18,9 +18,11 @@ them a poster, and it converts and files them the way Boro sorts them.
    `BoroWizard.settings.txt`). Untick any you want to leave alone.
 2. **What are they?** Each video gets a shelf and a name, guessed from the file
    name. Click a row to fix it. Red rows still need something.
-   For a batch of episodes: **Select all** (or Ctrl/Shift-click rows), pick
-   TV episode and type the show once, then **Number 1, 2, 3...** numbers them
-   down the list and **Titles from TVmaze** fills in the episode names.
+   For a batch of episodes press **Make them a TV show...**: type the show
+   once, pick the season, keep the episode numbers from the file names (or
+   number them in list order) and get the titles from TVmaze. It works on all
+   rows, or just the ones you select. Files named only "Episode 3" take the
+   folder's name as the show.
    - **Movie** -> `VIDEO\Movies\<Title>.mp4`
    - **TV episode** -> `VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Title>.mp4`
    - **Music video** -> `VIDEO\Music\<Artist - Song>.mp4`
