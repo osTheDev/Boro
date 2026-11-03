@@ -15,6 +15,7 @@ typedef struct {
     char name[64];
     u32 modified; // file time, seconds
     int thumb;    // 0 not made yet, 1 made, -1 can't be read
+    u32 taken;    // YYYYMMDD from EXIF, read with the thumbnail; 0 until then or if none
 } Photo;
 
 typedef struct {
@@ -30,6 +31,7 @@ extern int palbum_count;
 
 void plib_init(const char *data_dir, const char *picture_dir);
 const char *plib_dir(void); // like ms0:/PICTURE
+const char *plib_trash_dir(void); // where deleted photos wait, in Boro's data folder
 void plib_scan(void);
 
 void plib_thumbs(int on);

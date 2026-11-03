@@ -47,4 +47,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$TAG" "Boro-${TAG}.zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Boro $TAG" --notes "Copy the PSP folder from the zip to the root of your memory stick, then launch Boro from the XMB. Music goes in MUSIC/ (radio-only artists in MUSIC/RADIO/<Artist>/), videos in VIDEO/Movies, VIDEO/Shows or VIDEO/Clips."
+        run: gh release create "$TAG" "Boro-${TAG}.zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Boro $TAG" --notes "Copy the PSP folder from the zip to the root of your memory stick, then launch Boro from the XMB. Music goes in MUSIC/ (radio-only artists in MUSIC/RADIO/<Artist>/), movies in VIDEO/Movies, shows in VIDEO/Shows/<Show>/ (cover.jpg for the poster), music videos in VIDEO/Music, clips in VIDEO/Clips, photos in PICTURE/."

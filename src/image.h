@@ -16,6 +16,9 @@ u8 *image_load(const char *path, int want, int *w, int *h);
 // Just the small preview a camera keeps inside a JPEG, upright, or NULL.
 u8 *image_preview(const char *path, int *w, int *h);
 
+// The date a JPEG's EXIF says it was taken, as YYYYMMDD, or 0.
+u32 image_taken(const char *path);
+
 // Decodes on the calling thread give up early (returning NULL) once
 // cancelled() returns nonzero.
 void image_cancel_on(int (*cancelled)(void));

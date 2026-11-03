@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
     *strrchr(app_dir, '/') = 0;
     volume_init(app_dir);
     library_start(data_dir, music_dir);
-    vlib_init(data_dir, video_dir);
+    vlib_init(data_dir, video_dir, picture_dir);
     plib_init(data_dir, picture_dir);
     home_init();
 

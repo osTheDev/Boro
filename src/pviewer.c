@@ -25,6 +25,7 @@
 
 static Font *f_name, *f_small, *f_hint, *f_zoom;
 static int run_first, run_count, cur;
+static int *run_list; // photos[] indexes in viewing order, or NULL for run_first..
 static char context[64];
 
 // The photo on screen, cut into textures the GU can take.
@@ -95,6 +96,18 @@ static u8 *decode(int idx, int *w, int *h)
     return rgba;
 }
 
+static int run_at(int i) { return run_list ? run_list[i] : run_first + i; }
+
+// The photo d steps from photo idx in the run, or -1.
+static int run_step(int idx, int d)
+{
+    int pos = -1;
+    if (!run_list) pos = idx - run_first;
+    else for (int i = 0; i < run_count && pos < 0; i++) if (run_list[i] == idx) pos = i;
+    if (pos < 0 || pos + d < 0 || pos + d >= run_count) return -1;
+    return run_at(pos + d);
+}
+
 static int worker(SceSize args, void *argp)
 {
     (void)args; (void)argp;
@@ -124,8 +137,8 @@ static int worker(SceSize args, void *argp)
             publish(idx, rgba, w, h, 0);
         }
         // Read the next one ahead while this one is looked at.
-        int next = idx + dir;
-        if (next < run_first || next >= run_first + run_count || want != idx) continue;
+        int next = run_step(idx, dir);
+        if (next < 0 || want != idx) continue;
         free(ahead_rgba);
         ahead_rgba = NULL;
         ahead_idx = -1;
@@ -183,11 +196,11 @@ static void show(int index)
     zoom_step = 0;
     zoom = 1;
     bars_t = BARS_SECONDS;
-    want = run_first + cur;
+    want = run_at(cur);
     sceKernelSignalSema(wake, 1);
 }
 
-void pviewer_open(int first, int count, int index, const char *ctx)
+static void open_run(int first, int count, int *list, int index, const char *ctx)
 {
     if (wake < 0) {
         f_name = ui_font(FAMILY_SORA, 700, 13);
@@ -198,11 +211,24 @@ void pviewer_open(int first, int count, int index, const char *ctx)
         SceUID th = sceKernelCreateThread("boro_pviewer", worker, 0x24, 0x20000, PSP_THREAD_ATTR_USER, NULL);
         if (th >= 0) sceKernelStartThread(th, 0, NULL);
     }
+    free(run_list);
+    run_list = list;
     run_first = first;
     run_count = count;
     snprintf(context, sizeof(context), "%s", ctx);
     show(index);
 }
+
+void pviewer_open_list(const int *list, int count, int index, const char *ctx)
+{
+    // Copied: the worker reads it while the caller's list may change.
+    int *copy = malloc(count * sizeof(int));
+    if (!copy) return;
+    memcpy(copy, list, count * sizeof(int));
+    open_run(0, count, copy, index, ctx);
+}
+
+void pviewer_open(int first, int count, int index, const char *ctx) { open_run(first, count, NULL, index, ctx); }
 
 int pviewer_current(void) { return cur; }
 
@@ -225,7 +251,7 @@ static void clamp_view(void)
 static void take_decoded(void)
 {
     if (done_idx < 0) return;
-    if (done_idx == run_first + cur && (state == 0 || (preview == 1 && !done_preview))) {
+    if (done_idx == run_at(cur) && (state == 0 || (preview == 1 && !done_preview))) {
         if (!done_rgba) {
             if (preview) preview = 2; // keep the preview up
             else state = done_w < 0 ? -2 : -1;
@@ -339,7 +365,7 @@ static void draw_bars(void)
         if (i) gfx_gradient(0, y, SCREEN_W, 34, clear, clear, dark, dark);
         else gfx_gradient(0, y, SCREEN_W, 34, dark, dark, clear, clear);
     }
-    const Photo *ph = &photos[run_first + cur];
+    const Photo *ph = &photos[run_at(cur)];
     font_draw_fit(f_name, 14, 20, ph->name, color_alpha(TEXT, a), 260);
     char line[96];
     snprintf(line, sizeof(line), "%d of %d \xC2\xB7 %s", cur + 1, run_count, context);

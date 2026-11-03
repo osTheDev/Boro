@@ -1,5 +1,5 @@
-// The Photos tab of the Video section: albums and loose photos from PICTURE
-// in a grid, drawn under the section's tab bar.
+// The Photos tab of the Video section, drawn under the section's tab bar: a
+// Library of every photo and clip by day, and the PICTURE folders as Albums.
 #ifndef BORO_PHOTOS_H
 #define BORO_PHOTOS_H
 
@@ -10,5 +10,6 @@ void photos_leave(void);
 int photos_update(const Input *in, float dt); // 1 when ○ should leave the section
 int photos_viewing(void); // a photo fills the screen; photos_draw draws everything
 void photos_draw(float dt);
+int photos_take_play(void); // a clip picked to play (videos[] index), once, or -1
 
 #endif

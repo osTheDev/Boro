@@ -10,8 +10,8 @@
 #include <strings.h>
 #include "image.h"
 
-#define THUMB_MAGIC 0x31485450 // "PTH1"
-#define LOADED 24              // thumbnail textures kept in memory
+#define THUMB_MAGIC 0x32485450 // "PTH2": PTH1 had no date taken
+#define LOADED 40              // thumbnail textures kept in memory (the Library grid shows about 28)
 #define WANTED 16
 
 Photo *photos;
@@ -30,7 +30,7 @@ typedef struct { int index; Texture *tex; u32 used; } Loaded;
 static Loaded loaded[LOADED];
 static u32 use_clock;
 
-typedef struct { u32 magic, modified; s32 has_pixels; } ThumbHead;
+typedef struct { u32 magic, modified; s32 has_pixels; u32 taken; } ThumbHead;
 
 static u32 fnv(const char *s)
 {
@@ -127,8 +127,10 @@ static void read_thumb_head(Photo *p)
     SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (fd < 0) return;
     ThumbHead h;
-    if (sceIoRead(fd, &h, sizeof(h)) == sizeof(h) && h.magic == THUMB_MAGIC && h.modified == p->modified)
+    if (sceIoRead(fd, &h, sizeof(h)) == sizeof(h) && h.magic == THUMB_MAGIC && h.modified == p->modified) {
         p->thumb = h.has_pixels ? 1 : -1;
+        p->taken = h.taken;
+    }
     sceIoClose(fd);
 }
 
@@ -188,7 +190,7 @@ static void shrink(const u8 *rgba, int w, int h, u32 *out)
 static void make_thumb(Photo *p)
 {
     static u32 px[PTHUMB_W * PTHUMB_H];
-    ThumbHead h = { THUMB_MAGIC, p->modified, 0 };
+    ThumbHead h = { THUMB_MAGIC, p->modified, 0, image_taken(p->path) };
     int w, hh;
     u8 *rgba = image_load(p->path, PTHUMB_H, &w, &hh);
     if (rgba) {
@@ -204,6 +206,7 @@ static void make_thumb(Photo *p)
         if (h.has_pixels) sceIoWrite(fd, px, sizeof(px));
         sceIoClose(fd);
     }
+    p->taken = h.taken;
     p->thumb = h.has_pixels ? 1 : -1;
 }
 
@@ -298,6 +301,9 @@ const Texture *plib_thumb(int index)
 
 const char *plib_dir(void) { return picture_dir; }
 
+static char trash[300];
+const char *plib_trash_dir(void) { return trash; }
+
 void plib_init(const char *data, const char *dir)
 {
     snprintf(data_dir, sizeof(data_dir), "%s", data);
@@ -305,6 +311,8 @@ void plib_init(const char *data, const char *dir)
     char path[300];
     snprintf(path, sizeof(path), "%s/pthumbs", data_dir);
     sceIoMkdir(path, 0777);
+    snprintf(trash, sizeof(trash), "%.280s/trash", data_dir);
+    sceIoMkdir(trash, 0777);
     for (int i = 0; i < LOADED; i++) loaded[i].index = -1;
     busy = sceKernelCreateSema("pthumbs", 0, 1, 1, NULL);
     SceUID th = sceKernelCreateThread("boro_pthumbs", worker_thread, 0x22, 0x20000, PSP_THREAD_ATTR_USER, NULL);
