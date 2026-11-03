@@ -9,6 +9,7 @@
 #include <strings.h>
 #include "gfx.h"
 #include "photos.h"
+#include "plib.h"
 #include "player.h"
 #include "settings.h"
 #include "ui.h"
@@ -88,12 +89,13 @@ static int cmp_az(const void *a, const void *b)
     return strcasecmp(videos[*(const int *)a].title, videos[*(const int *)b].title);
 }
 
-// Clips share the Music Videos tab until they move to Photos.
-static int is_music(const Video *v) { return v->category == VCAT_MUSIC || v->category == VCAT_CLIPS; }
+// Clips live in Photos, among the pictures.
+static int is_music(const Video *v) { return v->category == VCAT_MUSIC; }
+static int is_clip(const Video *v) { return v->category == VCAT_CLIPS; }
 
 static int tab_has(int t, const Video *v)
 {
-    if (t == TAB_TVM) return !is_music(v);
+    if (t == TAB_TVM) return !is_music(v) && !is_clip(v);
     if (t == TAB_MUSIC) return is_music(v);
     return 0;
 }
@@ -133,10 +135,13 @@ void video_save(void)
 static void start(int index, u32 from)
 {
     vlib_thumbs(0);
+    plib_thumbs(0);
+    plib_thumbs_wait();
     // The music would fight the soundtrack.
     if (player_song() >= 0 && !player_paused()) player_toggle_pause();
     if (vplayer_open(videos[index].path, from) != 0) {
         vlib_thumbs(1);
+        if (tab == TAB_PHOTOS) plib_thumbs(1);
         return;
     }
     vplayer_set_gain(gain);
@@ -155,6 +160,7 @@ static void stop(int finished)
     playing = -1;
     build_list(1);
     vlib_thumbs(1);
+    if (tab == TAB_PHOTOS) plib_thumbs(1);
 }
 
 // ---- Home ---------------------------------------------------------------------
@@ -211,7 +217,7 @@ static void build_home(void)
     for (int i = 0; i < video_count; i++) {
         const Video *v = &videos[i];
         int r = is_music(v) ? 1 : 0;
-        if ((r == 0 && v->show >= 0) || row_count[r] >= 512) continue;
+        if (is_clip(v) || (r == 0 && v->show >= 0) || row_count[r] >= 512) continue;
         rows[r][row_count[r]++] = i;
     }
     for (int r = 0; r < HOME_ROWS; r++) {
@@ -386,7 +392,9 @@ static int browser_update(const Input *in, float dt)
         return 0;
     }
     if (tab == TAB_PHOTOS) {
-        if (!photos_update(in, dt)) return 0;
+        int r = photos_update(in, dt), clip = photos_take_play();
+        if (clip >= 0) start(clip, resume_of(&videos[clip]));
+        if (!r) return 0;
         photos_leave();
         vlib_thumbs(0);
         return 1;

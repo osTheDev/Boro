@@ -38,7 +38,8 @@ extern int video_count;
 extern Show *shows;
 extern int show_count;
 
-void vlib_init(const char *data_dir, const char *video_dir);
+// MP4s under picture_dir are read as clips, shown with the photos.
+void vlib_init(const char *data_dir, const char *video_dir, const char *picture_dir);
 const char *vlib_dir(void); // like ms0:/VIDEO
 void vlib_scan(void); // rereads the folder; keeps what's known
 

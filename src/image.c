@@ -161,6 +161,7 @@ static u32 get32(const u8 *p, int le) { return le ? get16(p, 1) | get16(p + 2, 1
 // What the APP1 Exif block near the start of a JPEG says.
 typedef struct {
     int orient;              // 1 (upright) to 8
+    u32 taken;               // YYYYMMDD the photo was taken, 0 when not given
     const u8 *thumb;         // the camera's own small JPEG preview, if it is in reach
     u32 thumb_size;
     u32 width, height;       // of the full picture, 0 if not given
@@ -178,6 +179,15 @@ static u32 read_ifd(const u8 *tiff, u32 tn, int le, u32 ifd, Exif *e, u32 *sub)
         u32 v = type == 3 ? get16(t + 8, le) : get32(t + 8, le);
         switch (tag) {
         case 0x0112: e->orient = v >= 1 && v <= 8 ? v : 1; break;
+        case 0x9003: // DateTimeOriginal; DateTime (0x0132) only when there's none
+        case 0x0132:
+            if (type == 2 && v + 10 <= tn && (tag == 0x9003 || !e->taken)) {
+                const u8 *d = tiff + v;
+                int y = 0, m = 0, dd = 0;
+                if (sscanf((const char *)d, "%4d:%2d:%2d", &y, &m, &dd) == 3 && y > 1900 && m >= 1 && m <= 12 && dd >= 1 && dd <= 31)
+                    e->taken = y * 10000 + m * 100 + dd;
+            }
+            break;
         case 0x8769: *sub = v; break;
         case 0xA002: e->width = v; break;
         case 0xA003: e->height = v; break;
@@ -296,6 +306,19 @@ static u8 *load(const char *path, int want, int *w, int *h)
 u8 *image_load(const char *path, int want, int *w, int *h) { return load(path, want, w, h); }
 
 u8 *image_preview(const char *path, int *w, int *h) { return load(path, -1, w, h); }
+
+u32 image_taken(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    u8 *head = malloc(64 * 1024);
+    u32 n = head ? fread(head, 1, 64 * 1024, f) : 0;
+    fclose(f);
+    Exif exif;
+    exif_read(head, n >= 4 && head[0] == 0xFF && head[1] == 0xD8 ? n : 0, &exif);
+    free(head);
+    return exif.taken;
+}
 
 u8 *image_read_file(const char *path, u32 max, u32 *size)
 {

@@ -15,6 +15,7 @@ typedef struct {
     char name[64];
     u32 modified; // file time, seconds
     int thumb;    // 0 not made yet, 1 made, -1 can't be read
+    u32 taken;    // YYYYMMDD from EXIF, read with the thumbnail; 0 until then or if none
 } Photo;
 
 typedef struct {

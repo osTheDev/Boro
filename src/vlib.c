@@ -25,7 +25,7 @@ Show *shows;
 int show_count;
 static int show_cap;
 
-static char data_dir[256], video_dir[256];
+static char data_dir[256], video_dir[256], picture_dir[256];
 static SceUID busy = -1;
 static volatile int thumbs_on;
 static SceUID worker = -1;
@@ -445,6 +445,8 @@ void vlib_scan(void)
     show_count = 0;
     posters_forget();
     walk(video_dir, VCAT_OTHER, -1, 0, 0, 0);
+    // Videos among the photos (phone clips) are clips too.
+    if (*picture_dir) walk(picture_dir, VCAT_CLIPS, -1, 0, 0, 0);
     for (int i = 0; i < video_count; i++) read_thumb_head(&videos[i]);
     load_resume();
     count_watched();
@@ -578,10 +580,11 @@ const Texture *vlib_thumb(int index)
 
 const char *vlib_dir(void) { return video_dir; }
 
-void vlib_init(const char *data, const char *dir)
+void vlib_init(const char *data, const char *dir, const char *pictures)
 {
     snprintf(data_dir, sizeof(data_dir), "%s", data);
     snprintf(video_dir, sizeof(video_dir), "%s", dir);
+    snprintf(picture_dir, sizeof(picture_dir), "%s", pictures);
     char path[300];
     snprintf(path, sizeof(path), "%s/thumbs", data_dir);
     sceIoMkdir(path, 0777);
