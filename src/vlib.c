@@ -370,6 +370,33 @@ static int add_show(const char *name, const char *dir)
 }
 
 // shows_root: dir is the Shows folder itself, so each folder in it is a show.
+// A folder of episodes outside a TV folder (say MOVIE/Anime/<Show>): it has
+// season folders, or two or more numbered episodes, or one with a cover.
+static int looks_like_show(const char *dir)
+{
+    SceUID d = sceIoDopen(dir);
+    if (d < 0) return 0;
+    SceIoDirent ent;
+    int episodes = 0, seasons = 0, cover = 0;
+    for (;;) {
+        memset(&ent, 0, sizeof(ent));
+        if (sceIoDread(d, &ent) <= 0) break;
+        if (ent.d_name[0] == '.') continue;
+        if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
+            if (season_of_folder(ent.d_name)) seasons++;
+        } else if (is_mp4(ent.d_name)) {
+            int sn = 0, ep = 0;
+            episode_of_name(ent.d_name, &sn, &ep);
+            if (ep > 0) episodes++;
+        } else if (!strncasecmp(ent.d_name, "cover.", 6) || !strncasecmp(ent.d_name, "poster.", 7) ||
+                   !strncasecmp(ent.d_name, "folder.", 7)) {
+            cover = 1;
+        }
+    }
+    sceIoDclose(d);
+    return seasons > 0 || episodes >= 2 || (cover && episodes > 0);
+}
+
 static void walk(const char *dir, int category, int show, int season, int shows_root, int depth)
 {
     if (depth > 5) return;
@@ -390,6 +417,8 @@ static void walk(const char *dir, int category, int show, int season, int shows_
                 walk(path, c, -1, 0, c == VCAT_SHOWS, depth + 1);
             } else if (shows_root) {
                 walk(path, category, add_show(ent.d_name, path), 0, 0, depth + 1);
+            } else if (show < 0 && category != VCAT_CLIPS && looks_like_show(path)) {
+                walk(path, VCAT_SHOWS, add_show(ent.d_name, path), 0, 0, depth + 1);
             } else {
                 int sn = show >= 0 ? season_of_folder(ent.d_name) : 0;
                 walk(path, category, show, sn ? sn : season, 0, depth + 1);
