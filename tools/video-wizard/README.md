@@ -37,10 +37,11 @@ them a poster, and it converts and files them the way Boro sorts them.
    480x272, stereo AAC). **Pause** waits after the current one; **Stop** stops.
    When it's done it opens the PSP folder.
 
-**Show covers...** (on the first step) fixes posters for shows you already
-have: pick a folder (the VIDEO folder on the memory stick works), pick a show,
-flip through its TVmaze posters with < >, or use your own, then **Save cover**.
-It writes `cover.jpg` into the show's folder.
+**Covers...** (on the first step) fixes posters for shows and movies you
+already have: pick a folder (the VIDEO folder on the memory stick works), pick
+one, flip through posters with < > (TVmaze for shows, iTunes for movies),
+search by another name or use your own, then **Save cover**. Shows get
+`cover.jpg` in their folder; movies get `<name>.jpg` beside the video.
 
 Converted videos land in **<folder>\PSP\VIDEO**. Copy that VIDEO folder onto
 the memory stick and let it merge. Originals move to **<folder>\Originals**. A

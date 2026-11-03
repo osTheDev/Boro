@@ -371,6 +371,22 @@ static int add_show(const char *name, const char *dir)
 }
 
 // shows_root: dir is the Shows folder itself, so each folder in it is a show.
+// A 1-3 digit number standing on its own in a file name ("FLCL 01",
+// "Show - 3"), not a year, "x264" or "480p".
+static int short_number(const char *name)
+{
+    const char *end = strrchr(name, '.');
+    if (!end) end = name + strlen(name);
+    for (const char *p = name; p < end; p++) {
+        if (!isdigit((u8)*p) || (p > name && isalnum((u8)p[-1]))) continue;
+        const char *q = p;
+        while (q < end && isdigit((u8)*q)) q++;
+        if (q - p <= 3 && (q == end || !isalnum((u8)*q))) return 1;
+        p = q - 1;
+    }
+    return 0;
+}
+
 // A folder of episodes outside a TV folder (say MOVIE/Anime/<Show>): it has
 // season folders, or two or more numbered episodes, or one with a cover.
 static int looks_like_show(const char *dir)
@@ -388,7 +404,7 @@ static int looks_like_show(const char *dir)
         } else if (is_mp4(ent.d_name)) {
             int sn = 0, ep = 0;
             episode_of_name(ent.d_name, &sn, &ep);
-            if (ep > 0) episodes++;
+            if (ep > 0 || short_number(ent.d_name)) episodes++;
         } else if (!strncasecmp(ent.d_name, "cover.", 6) || !strncasecmp(ent.d_name, "poster.", 7) ||
                    !strncasecmp(ent.d_name, "folder.", 7)) {
             cover = 1;

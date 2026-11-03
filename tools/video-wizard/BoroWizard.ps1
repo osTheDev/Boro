@@ -473,7 +473,7 @@ $P1.Controls.Add($FileList)
 $Untick = New-Label 'Untick any you want to leave alone.' 0 220; $Untick.ForeColor = $Dim; $P1.Controls.Add($Untick)
 $OutLabel = New-Label '' 0 242 366; $OutLabel.Size = New-Object Drawing.Size(366, 32); $P1.Controls.Add($OutLabel)
 $Remember = New-Label "I'll remember this folder for next time." 0 280 250; $Remember.ForeColor = $Dim; $P1.Controls.Add($Remember)
-$CoversBtn = New-Button 'Show covers...' 260 276 100; $P1.Controls.Add($CoversBtn)
+$CoversBtn = New-Button 'Covers...' 260 276 100; $P1.Controls.Add($CoversBtn)
 $Files = @()     # full paths, in list order
 
 function Fill-Files {
@@ -512,43 +512,78 @@ $BrowseBtn.Add_Click({
 # ---- Show covers: fix the posters of shows you already have ----
 $EpisodeName = '(?i)(s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{2,3}\b|(^|[\s._\-])(episode|ep|e)[\s._\-]*\d{1,3}\b)'
 
-# Show folders under a folder, at any depth: season folders inside, or two or
-# more numbered episodes (the same rule Boro uses).
-function Find-ShowFolders([string]$root, [int]$depth = 0) {
+# A file name with a short episode-like number in it ("FLCL 01", "Show - 3"),
+# not a year or "x264"/"480p".
+$ShortNumber = '(?<![A-Za-z0-9])\d{1,3}(?![A-Za-z0-9])'
+
+function Is-EpisodeFile($f) {
+    if ($VideoExts -notcontains $f.Extension.ToLower()) { return $false }
+    $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+    return $base -match $EpisodeName -or $base -match $ShortNumber
+}
+
+# What under a folder can have a cover, at any depth: show folders (season
+# folders inside, or two or more numbered episodes; the same rule Boro uses)
+# and single videos (movies), which get <name>.jpg beside them.
+function Find-Coverables([string]$root, [int]$depth = 0) {
     $out = @()
     if ($depth -gt 5) { return $out }
+    foreach ($f in @(Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue)) {
+        if ($VideoExts -contains $f.Extension.ToLower()) { $out += @{ Kind = 'movie'; Path = $f.FullName } }
+    }
     foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
         if ($d.Name.StartsWith('.')) { continue }
         $seasons = @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '^(?i)(season|series)\s*\d+$|^[sS]\d+$' }).Count
-        $eps = @(Get-ChildItem -LiteralPath $d.FullName -File -ErrorAction SilentlyContinue |
-            Where-Object { $VideoExts -contains $_.Extension.ToLower() -and $_.Name -match $EpisodeName }).Count
-        if ($seasons -gt 0 -or $eps -ge 2) { $out += $d.FullName }
-        else { $out += Find-ShowFolders $d.FullName ($depth + 1) }
+        $eps = @(Get-ChildItem -LiteralPath $d.FullName -File -ErrorAction SilentlyContinue | Where-Object { Is-EpisodeFile $_ }).Count
+        if ($seasons -gt 0 -or $eps -ge 2) { $out += @{ Kind = 'show'; Path = $d.FullName } }
+        else { $out += Find-Coverables $d.FullName ($depth + 1) }
     }
     return $out
 }
 
+function Cover-Path($e) {
+    if ($e.Kind -eq 'show') { return Join-Path $e.Path 'cover.jpg' }
+    return [IO.Path]::ChangeExtension($e.Path, '.jpg')
+}
+function Cover-Name($e) {
+    if ($e.Kind -eq 'show') { return Clean-Name (Split-Path $e.Path -Leaf) }
+    $n = Clean-Name ([IO.Path]::GetFileNameWithoutExtension($e.Path))
+    return ($n -replace '\s*\(?\b(19|20)\d{2}\b\)?\s*$', '').Trim()
+}
+
+# Movie posters from the iTunes store (no sign-up needed), best first.
+function Find-MoviePosters([string]$movie) {
+    $urls = @()
+    try {
+        $q = [uri]::EscapeDataString($movie)
+        $r = Invoke-RestMethod -Uri "https://itunes.apple.com/search?term=$q&media=movie&entity=movie&limit=6" -TimeoutSec 8
+        foreach ($m in $r.results) { if ($m.artworkUrl100) { $urls += ($m.artworkUrl100 -replace '\d+x\d+bb', '400x600bb') } }
+    } catch { Write-Log "No posters from iTunes for '$movie': $($_.Exception.Message)" }
+    return $urls
+}
+
 function Show-CoversDialog {
     $dlg = New-Object Windows.Forms.FolderBrowserDialog
-    $dlg.Description = 'Pick the folder your shows are in. The VIDEO folder on the memory stick works too.'
+    $dlg.Description = 'Pick the folder your videos are in. The VIDEO folder on the memory stick works too.'
     if ($script:Folder) { $dlg.SelectedPath = $script:Folder }
     if ($dlg.ShowDialog() -ne 'OK') { return }
     $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor
-    $found = @(Find-ShowFolders $dlg.SelectedPath | Sort-Object { Split-Path $_ -Leaf })
+    $found = @(Find-Coverables $dlg.SelectedPath | Sort-Object { $_.Kind -ne 'show' }, { Cover-Name $_ })
     $Form.Cursor = [Windows.Forms.Cursors]::Default
     if (-not $found.Count) {
-        [Windows.Forms.MessageBox]::Show('No show folders in there.', 'Boro Video Wizard', 'OK', 'Information') | Out-Null
+        [Windows.Forms.MessageBox]::Show('No videos in there.', 'Boro Video Wizard', 'OK', 'Information') | Out-Null
         return
     }
 
     $d = New-Object Windows.Forms.Form
-    $d.Text = 'Show covers'; $d.ClientSize = New-Object Drawing.Size(430, 300)
+    $d.Text = 'Covers'; $d.ClientSize = New-Object Drawing.Size(430, 300)
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
     $d.StartPosition = 'CenterParent'; $d.BackColor = $Gray; $d.Font = $Font
-    $d.Controls.Add((New-Label 'Shows:' 10 8 180 $Bold))
+    $d.Controls.Add((New-Label 'Shows and movies:' 10 8 190 $Bold))
     $list = New-Object Windows.Forms.ListBox
     $list.Location = New-Object Drawing.Point(10, 26); $list.Size = New-Object Drawing.Size(190, 230); $list.IntegralHeight = $false
+    $list.HorizontalScrollbar = $true
     $d.Controls.Add($list)
     $pic = New-Object Windows.Forms.PictureBox
     $pic.Location = New-Object Drawing.Point(212, 26); $pic.Size = New-Object Drawing.Size(120, 180)
@@ -560,17 +595,18 @@ function Show-CoversDialog {
     $search = New-Button 'Search as...' 340 54 82; $d.Controls.Add($search)
     $own = New-Button 'My own...' 340 82 82; $d.Controls.Add($own)
     $save = New-Button 'Save cover' 340 130 82; $d.Controls.Add($save)
-    $hint = New-Label 'Saved as cover.jpg in the show folder.' 10 262 300; $hint.ForeColor = $Dim; $d.Controls.Add($hint)
+    $hint = New-Label 'Shows get cover.jpg; movies get <name>.jpg.' 10 262 300; $hint.ForeColor = $Dim; $d.Controls.Add($hint)
     $close = New-Button 'Close' 345 268 75; $close.DialogResult = 'Cancel'; $d.Controls.Add($close); $d.CancelButton = $close
 
-    # Per show: the poster URLs, which one is showing, and the picture on screen.
-    $st = @{ Urls = @(); At = 0; Img = $null; Label = '' }
+    # The poster URLs found, which one is showing, and the picture on screen.
+    $st = @{ Urls = @(); At = 0; Img = $null; Label = ''; From = '' }
     $label = {
-        param($dir)
-        $n = Split-Path $dir -Leaf
-        if (Test-Path -LiteralPath (Join-Path $dir 'cover.jpg')) { "$n   (has cover)" } else { $n }
+        param($e)
+        $tag = $(if ($e.Kind -eq 'show') { 'Show' } else { 'Movie' })
+        $n = "${tag}:  $(Cover-Name $e)"
+        if (Test-Path -LiteralPath (Cover-Path $e)) { "$n   (has cover)" } else { $n }
     }
-    foreach ($f in $found) { [void]$list.Items.Add((& $label $f)) }
+    foreach ($e in $found) { [void]$list.Items.Add((& $label $e)) }
 
     $showOne = {
         if (-not $st.Urls.Count) { $pic.Image = $st.Img; $info.Text = $st.Label; return }
@@ -578,30 +614,36 @@ function Show-CoversDialog {
         $st.Img = Download-Image $st.Urls[$st.At]
         $d.Cursor = [Windows.Forms.Cursors]::Default
         $pic.Image = $st.Img
-        $info.Text = "TVmaze poster $($st.At + 1) of $($st.Urls.Count)"
+        $info.Text = "$($st.From) poster $($st.At + 1) of $($st.Urls.Count)"
     }
     $lookUp = {
-        param($name)
-        $d.Cursor = [Windows.Forms.Cursors]::WaitCursor; $info.Text = 'Looking on TVmaze...'; $d.Refresh()
-        $st.Urls = @(Find-Posters $name); $st.At = 0; $st.Img = $null
+        param($e, $name)
+        $d.Cursor = [Windows.Forms.Cursors]::WaitCursor; $info.Text = 'Looking...'; $d.Refresh()
+        if ($e.Kind -eq 'show') { $st.From = 'TVmaze'; $st.Urls = @(Find-Posters $name) }
+        else { $st.From = 'iTunes'; $st.Urls = @(Find-MoviePosters $name) }
+        # A show TVmaze doesn't know may be a film or special on iTunes, and the other way round.
+        if (-not $st.Urls.Count -and $e.Kind -eq 'show') { $st.From = 'iTunes'; $st.Urls = @(Find-MoviePosters $name) }
+        if (-not $st.Urls.Count -and $e.Kind -ne 'show') { $st.From = 'TVmaze'; $st.Urls = @(Find-Posters $name) }
+        $st.At = 0; $st.Img = $null
         $d.Cursor = [Windows.Forms.Cursors]::Default
-        if (-not $st.Urls.Count) { $st.Label = "TVmaze doesn't know '$name'. Try Search as..." }
+        if (-not $st.Urls.Count) { $st.Label = "Nothing found for '$name'. Try Search as..." }
         & $showOne
     }
     $list.Add_SelectedIndexChanged({
         if ($list.SelectedIndex -lt 0) { return }
-        $dir = $found[$list.SelectedIndex]
-        $cur = Join-Path $dir 'cover.jpg'
+        $e = $found[$list.SelectedIndex]
         $pic.Image = $null
-        & $lookUp (Clean-Name (Split-Path $dir -Leaf))
+        & $lookUp $e (Cover-Name $e)
+        $cur = Cover-Path $e
         if (-not $st.Urls.Count -and (Test-Path -LiteralPath $cur)) { $st.Img = Load-Image $cur; $pic.Image = $st.Img; $info.Text = 'Its cover now' }
     })
     $prev.Add_Click({ if ($st.Urls.Count) { $st.At = ($st.At + $st.Urls.Count - 1) % $st.Urls.Count; & $showOne } })
     $next.Add_Click({ if ($st.Urls.Count) { $st.At = ($st.At + 1) % $st.Urls.Count; & $showOne } })
     $search.Add_Click({
         if ($list.SelectedIndex -lt 0) { return }
-        $name = [Microsoft.VisualBasic.Interaction]::InputBox('Search TVmaze for:', 'Show covers', (Clean-Name (Split-Path $found[$list.SelectedIndex] -Leaf)))
-        if ($name.Trim()) { & $lookUp $name.Trim() }
+        $e = $found[$list.SelectedIndex]
+        $name = [Microsoft.VisualBasic.Interaction]::InputBox('Search for:', 'Covers', (Cover-Name $e))
+        if ($name.Trim()) { & $lookUp $e $name.Trim() }
     })
     $own.Add_Click({
         $img = Pick-Picture
@@ -609,12 +651,12 @@ function Show-CoversDialog {
     })
     $save.Add_Click({
         if ($list.SelectedIndex -lt 0 -or -not $st.Img) { return }
-        $dir = $found[$list.SelectedIndex]
+        $e = $found[$list.SelectedIndex]
         try {
-            Save-Jpeg $st.Img (Join-Path $dir 'cover.jpg') 400
-            $list.Items[$list.SelectedIndex] = (& $label $dir)
+            Save-Jpeg $st.Img (Cover-Path $e) 400
+            $list.Items[$list.SelectedIndex] = (& $label $e)
             $info.Text = 'Saved.'
-            Write-Log "Cover saved for $dir"
+            Write-Log "Cover saved: $(Cover-Path $e)"
         } catch { $info.Text = "Couldn't save: $($_.Exception.Message)" }
     })
     $list.SelectedIndex = 0
