@@ -8,6 +8,8 @@
 #include <strings.h>
 #include "font.h"
 #include "gfx.h"
+#include "image.h"
+#include <pspiofilemgr.h>
 #include "plib.h"
 #include "pviewer.h"
 #include "ui.h"
@@ -50,6 +52,18 @@ static int sel, album_sel;   // sel: in the Library or the open album; album_sel
 static float scroll;
 static int viewing, view_from_library;
 static int play = -1;
+static int trash_open;     // Recently Deleted is open
+static int confirm;        // 1: move the photo to Recently Deleted, 2: delete for good
+static float hold_t;       // how long square has been held
+static int hold_fired;
+
+#define TRASH_KEEP 4
+
+typedef struct { char file[300], orig[256], name[64]; } Trashed;
+static Trashed trash[TRASH_KEEP + 1];
+static int trash_count;
+static Texture *trash_tex[TRASH_KEEP];
+static int trash_tex_state[TRASH_KEEP]; // 0 not loaded, 1 loaded, -1 broken
 
 static Item *items;
 static int item_count;
@@ -211,14 +225,167 @@ static int albums_update(const Input *in)
         }
         return 0;
     }
-    int n = palbum_count;
+    int n = palbum_count + (trash_count ? 1 : 0);
     if (!n) return 0;
+    if (album_sel >= n) album_sel = n - 1;
     if (nav & PSP_CTRL_LEFT && album_sel > 0) album_sel--;
     if (nav & PSP_CTRL_RIGHT && album_sel < n - 1) album_sel++;
     if (nav & PSP_CTRL_UP && album_sel >= 3) album_sel -= 3;
     if (nav & PSP_CTRL_DOWN && album_sel / 3 < (n - 1) / 3) album_sel = album_sel + 3 < n ? album_sel + 3 : n - 1;
-    if (p & PSP_CTRL_CROSS) { album = album_sel; sel = 0; scroll = 0; }
+    if (p & PSP_CTRL_CROSS && album_sel == palbum_count) { trash_open = 1; sel = 0; }
+    else if (p & PSP_CTRL_CROSS) { album = album_sel; sel = 0; scroll = 0; }
     return 0;
+}
+
+// ---- Recently Deleted -------------------------------------------------------------
+//
+// Deleted photos move to PICTURE/.trash (hidden from the scan by its dot);
+// list.txt there holds "file<TAB>original path", oldest first. Only the last
+// TRASH_KEEP stay: a newer one deletes the oldest for good.
+
+
+static void trash_dir(char *out, int size) { snprintf(out, size, "%s/.trash", plib_dir()); }
+
+static void trash_save(void)
+{
+    char path[320];
+    trash_dir(path, sizeof(path));
+    strcat(path, "/list.txt");
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    for (int i = 0; i < trash_count; i++) fprintf(f, "%s\t%s\n", trash[i].file, trash[i].orig);
+    fclose(f);
+}
+
+static void trash_forget_textures(void) { for (int i = 0; i < TRASH_KEEP; i++) trash_tex_state[i] = 0; }
+
+static void trash_load(void)
+{
+    char path[320], line[600];
+    trash_dir(path, sizeof(path));
+    strcat(path, "/list.txt");
+    trash_count = 0;
+    trash_forget_textures();
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f) && trash_count < TRASH_KEEP) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        *tab = 0;
+        SceIoStat st;
+        if (sceIoGetstat(line, &st) < 0) continue; // removed by hand
+        Trashed *t = &trash[trash_count++];
+        snprintf(t->file, sizeof(t->file), "%.299s", line);
+        snprintf(t->orig, sizeof(t->orig), "%s", tab + 1);
+        const char *slash = strrchr(t->orig, '/');
+        snprintf(t->name, sizeof(t->name), "%.63s", slash ? slash + 1 : t->orig);
+    }
+    fclose(f);
+}
+
+static void trash_purge(int i)
+{
+    sceIoRemove(trash[i].file);
+    memmove(&trash[i], &trash[i + 1], (trash_count - i - 1) * sizeof(Trashed));
+    trash_count--;
+    trash_forget_textures();
+    trash_save();
+}
+
+static int trash_put(int photo)
+{
+    char dir[320];
+    trash_dir(dir, sizeof(dir));
+    sceIoMkdir(dir, 0777);
+    ScePspDateTime now;
+    sceRtcGetCurrentClockLocalTime(&now);
+    Trashed t;
+    snprintf(t.orig, sizeof(t.orig), "%s", photos[photo].path);
+    snprintf(t.name, sizeof(t.name), "%s", photos[photo].name);
+    snprintf(t.file, sizeof(t.file), "%.200s/%02d%02d%02d%02d_%.63s", dir, now.day, now.hour, now.minute, now.second, photos[photo].name);
+    if (sceIoRename(t.orig, t.file) < 0) return -1;
+    trash[trash_count++] = t;
+    while (trash_count > TRASH_KEEP) trash_purge(0);
+    trash_forget_textures();
+    trash_save();
+    return 0;
+}
+
+static void trash_restore(int i)
+{
+    if (sceIoRename(trash[i].file, trash[i].orig) < 0) {
+        // Its folder is gone: back to the top of PICTURE instead.
+        char path[320];
+        snprintf(path, sizeof(path), "%s/%s", plib_dir(), trash[i].name);
+        if (sceIoRename(trash[i].file, path) < 0) return;
+    }
+    memmove(&trash[i], &trash[i + 1], (trash_count - i - 1) * sizeof(Trashed));
+    trash_count--;
+    trash_forget_textures();
+    trash_save();
+}
+
+// A small picture of a trashed photo, made when first drawn.
+static const Texture *trash_thumb(int i)
+{
+    if (trash_tex_state[i] < 0) return NULL;
+    if (trash_tex_state[i] > 0) return trash_tex[i];
+    trash_tex_state[i] = -1;
+    int w, h;
+    u8 *px = image_load(trash[i].file, PTHUMB_H, &w, &h);
+    if (!px || w <= 0 || h <= 0) { free(px); return NULL; }
+    if (!trash_tex[i]) trash_tex[i] = tex_create(PTHUMB_W, PTHUMB_H);
+    Texture *t = trash_tex[i];
+    int cw = w, ch = h, ox = 0, oy = 0;
+    if (w * PTHUMB_H > h * PTHUMB_W) { cw = h * PTHUMB_W / PTHUMB_H; ox = (w - cw) / 2; }
+    else { ch = w * PTHUMB_H / PTHUMB_W; oy = (h - ch) / 2; }
+    for (int y = 0; y < PTHUMB_H; y++)
+        for (int x = 0; x < PTHUMB_W; x++) {
+            const u8 *c = px + ((oy + y * ch / PTHUMB_H) * w + ox + x * cw / PTHUMB_W) * 4;
+            t->px[y * t->tw + x] = RGBA(c[0], c[1], c[2], 255);
+        }
+    free(px);
+    tex_upload(t);
+    trash_tex_state[i] = 1;
+    return t;
+}
+
+// After a delete or restore: read PICTURE again, keeping the place.
+static void rescan(void)
+{
+    char name[64] = "";
+    if (album >= 0) snprintf(name, sizeof(name), "%s", palbums[album].name);
+    plib_scan();
+    build_library();
+    if (album >= 0) {
+        album = -1;
+        for (int i = 0; i < palbum_count; i++) if (!strcmp(palbums[i].name, name)) album = i;
+    }
+    int n = trash_open ? trash_count : album >= 0 ? palbums[album].count : item_count;
+    if (sel >= n) sel = n - 1;
+    if (sel < 0) sel = 0;
+    plib_thumbs(1);
+}
+
+// The photo square would delete here, or -1.
+static int deletable(void)
+{
+    if (trash_open) return trash_count ? 0 : -1;
+    if (album >= 0) return palbums[album].count ? palbums[album].first + sel : -1;
+    if (view == VIEW_LIBRARY && item_count) return items[sel].photo;
+    return -1;
+}
+
+static void do_confirm(void)
+{
+    if (confirm == 2) {
+        trash_purge(sel);
+        if (sel >= trash_count && sel > 0) sel--;
+        return;
+    }
+    int photo = deletable();
+    if (photo >= 0 && trash_put(photo) == 0) rescan();
 }
 
 // ---- Entry points -------------------------------------------------------------
@@ -237,6 +404,9 @@ void photos_enter(void)
     today = ymd_of(&now);
     plib_scan();
     build_library();
+    trash_load();
+    trash_open = 0;
+    confirm = 0;
     album = -1;
     sel = album_sel = 0;
     scroll = 0;
@@ -258,7 +428,6 @@ int photos_take_play(void)
 
 int photos_update(const Input *in, float dt)
 {
-    (void)dt;
     if (viewing) {
         if (pviewer_update(in, dt)) {
             // Back on the photo that was showing.
@@ -274,13 +443,36 @@ int photos_update(const Input *in, float dt)
         return 0;
     }
     u32 p = in->pressed;
-    if (p & PSP_CTRL_CIRCLE && album < 0) return 1;
-    if (p & PSP_CTRL_SQUARE && album < 0) {
+    if (confirm) {
+        if (p & PSP_CTRL_CROSS) { do_confirm(); confirm = 0; }
+        else if (p & PSP_CTRL_CIRCLE) confirm = 0;
+        return 0;
+    }
+    // Holding square 2 s asks to delete; a quick press switches Library and Albums.
+    if (in->held & PSP_CTRL_SQUARE) {
+        hold_t += dt;
+        if (hold_t >= 2 && !hold_fired) {
+            hold_fired = 1;
+            if (deletable() >= 0) confirm = trash_open ? 2 : 1;
+        }
+        return 0;
+    }
+    if (hold_t > 0 && hold_t < 0.6f && album < 0 && !trash_open) {
         view = view == VIEW_LIBRARY ? VIEW_ALBUMS : VIEW_LIBRARY;
         sel = 0;
         scroll = 0;
+    }
+    hold_t = 0;
+    hold_fired = 0;
+    if (trash_open) {
+        if (p & PSP_CTRL_CIRCLE) { trash_open = 0; return 0; }
+        if (!trash_count) return 0;
+        if (in->nav & PSP_CTRL_LEFT && sel > 0) sel--;
+        if (in->nav & PSP_CTRL_RIGHT && sel < trash_count - 1) sel++;
+        if (p & PSP_CTRL_CROSS) { trash_restore(sel); rescan(); }
         return 0;
     }
+    if (p & PSP_CTRL_CIRCLE && album < 0) return 1;
     return view == VIEW_LIBRARY ? library_update(in) : albums_update(in);
 }
 
@@ -381,9 +573,9 @@ static void library_draw(float dt)
 
 static void albums_draw(float dt)
 {
-    int n = palbum_count;
+    int n = palbum_count + (trash_count ? 1 : 0);
     char buf[48];
-    snprintf(buf, sizeof(buf), "%d album%s", n, n == 1 ? "" : "s");
+    snprintf(buf, sizeof(buf), "%d album%s", palbum_count, palbum_count == 1 ? "" : "s");
     font_draw_right(f_small, SCREEN_W - 14, 44, buf, DIM);
     int row = album_sel / 3;
     float target = row > 0 ? row - 1 : 0;
@@ -392,19 +584,20 @@ static void albums_draw(float dt)
     for (int i = 0; i < n; i++) {
         float x = 14 + (i % 3) * CARD_STEP_X, y = CONTENT_Y + 4 + (i / 3) * CARD_STEP_Y - scroll;
         if (y > CONTENT_B || y + CARD_STEP_Y < CONTENT_Y) continue;
-        const PhotoAlbum *a = &palbums[i];
-        int on = i == album_sel;
+        int on = i == album_sel, is_trash = i == palbum_count;
         if (on) ui_rrect(x - 3, y - 3, CARD_W + 6, CARD_H + 6, 9, ACCENT);
         if (on) ui_rrect(x - 1, y - 1, CARD_W + 2, CARD_H + 2, 7, BG);
-        plib_want(a->first);
-        const Texture *t = plib_thumb(a->first);
+        const Texture *t;
+        if (is_trash) t = trash_thumb(trash_count - 1);
+        else { plib_want(palbums[i].first); t = plib_thumb(palbums[i].first); }
         if (t) draw_crop(t, x, y, CARD_W, CARD_H);
-        else draw_placeholder(a->first, x, y, CARD_W, CARD_H);
+        else draw_placeholder(is_trash ? 99 : palbums[i].first, x, y, CARD_W, CARD_H);
+        if (is_trash) gfx_rect(x, y, CARD_W, CARD_H, RGBA(14, 15, 19, 120));
         ui_round_corners(x, y, CARD_W, CARD_H, 6, BG);
         char count[16];
-        snprintf(count, sizeof(count), "%d", a->count);
+        snprintf(count, sizeof(count), "%d", is_trash ? trash_count : palbums[i].count);
         float cw = font_width(f_small, count, 0);
-        font_draw_fit(f_small, x, y + CARD_H + 14, a->name, on ? TEXT : MUTED, CARD_W - cw - 8);
+        font_draw_fit(f_small, x, y + CARD_H + 14, is_trash ? "Recently Deleted" : palbums[i].name, on ? TEXT : MUTED, CARD_W - cw - 8);
         font_draw_right(f_small, x + CARD_W, y + CARD_H + 14, count, DIM);
     }
     gfx_unclip();
@@ -441,6 +634,49 @@ static void album_draw(float dt)
     gfx_unclip();
 }
 
+static void trash_draw(void)
+{
+    font_draw(f_head, 14, 50, "Recently Deleted", TEXT, 0);
+    font_draw(f_small, 14 + font_width(f_head, "Recently Deleted", 0) + 8, 50, "the last 4 deleted photos", MUTED, 0);
+    if (!trash_count) { font_draw_center(f_small, SCREEN_W / 2, 140, "Nothing here", MUTED); return; }
+    for (int i = 0; i < trash_count; i++) {
+        float x = 14 + i * CELL_W, y = 62;
+        int on = i == sel;
+        if (on) {
+            ui_rrect(x - 3, y - 3, PTHUMB_W + 6, PTHUMB_H + 6, 8, ACCENT);
+            ui_rrect(x - 1, y - 1, PTHUMB_W + 2, PTHUMB_H + 2, 6, BG);
+        }
+        const Texture *t = trash_thumb(i);
+        if (t) { gfx_filter(1); gfx_tex(t, x, y, PTHUMB_W, PTHUMB_H, 0xFFFFFFFF); }
+        else draw_placeholder(i + 77, x, y, PTHUMB_W, PTHUMB_H);
+        ui_round_corners(x, y, PTHUMB_W, PTHUMB_H, 5, BG);
+        font_draw_fit(f_label, x, y + PTHUMB_H + 13, trash[i].name, on ? TEXT : MUTED, PTHUMB_W);
+    }
+}
+
+// The bar that fills while square is held, and the question after it.
+static void draw_delete_ui(void)
+{
+    if (hold_t > 0.3f && !hold_fired && deletable() >= 0) {
+        float k = hold_t / 2 > 1 ? 1 : hold_t / 2, w = 220, x = (SCREEN_W - w) / 2, y = SCREEN_H - 56;
+        ui_rrect(x, y, w, 30, 8, HEX(0x1A1C24, 240));
+        font_draw_center(f_small, SCREEN_W / 2, y + 13, trash_open ? "Keep holding to delete for good" : "Keep holding to delete", TEXT);
+        gfx_rect(x + 12, y + 20, w - 24, 3, HEX(0x2E3240, 255));
+        gfx_rect(x + 12, y + 20, (w - 24) * k, 3, HEX(0xFF5B6B, 255));
+    }
+    if (!confirm) return;
+    gfx_rect(0, 0, SCREEN_W, SCREEN_H, RGBA(0, 0, 0, 150));
+    float w = 260, h = 92, x = (SCREEN_W - w) / 2, y = (SCREEN_H - h) / 2;
+    ui_rrect(x, y, w, h, 10, HEX(0x1A1C24, 255));
+    ui_ring(x, y, w, h, 10, HEX(0x2E3240, 255));
+    font_draw_center(f_tiny, SCREEN_W / 2, y + 26, confirm == 2 ? "Delete this photo for good?" : "Delete this photo?", TEXT);
+    font_draw_center(f_small, SCREEN_W / 2, y + 44, confirm == 2 ? "This can't be undone." : "It stays in Recently Deleted for a while.", MUTED);
+    float wx = ui_hint_width(f_label, ICON_CROSS, "Delete"), wo = ui_hint_width(f_label, ICON_CIRCLE, "Cancel");
+    float hx = SCREEN_W / 2 - (wx + 18 + wo) / 2;
+    ui_hint(f_label, hx, y + 74, ICON_CROSS, "Delete", TEXT);
+    ui_hint(f_label, hx + wx + 18, y + 74, ICON_CIRCLE, "Cancel", MUTED);
+}
+
 static float hint(float x, int glyph, const char *label)
 {
     x -= ui_hint_width(f_label, glyph, label);
@@ -460,10 +696,22 @@ void photos_draw(float dt)
         return;
     }
     float x = SCREEN_W - 14;
+    if (trash_open) {
+        trash_draw();
+        x = hint(x, ICON_CIRCLE, "Back");
+        if (trash_count) {
+            x = hint(x, ICON_SQUARE, "Hold: delete for good");
+            hint(x, ICON_CROSS, "Restore");
+        }
+        draw_delete_ui();
+        return;
+    }
     if (album >= 0) {
         album_draw(dt);
         x = hint(x, ICON_CIRCLE, "Back");
+        if (palbums[album].count) x = hint(x, ICON_SQUARE, "Hold: delete");
         hint(x, ICON_CROSS, "View");
+        draw_delete_ui();
         return;
     }
     draw_pills();
@@ -471,11 +719,12 @@ void photos_draw(float dt)
     else albums_draw(dt);
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
     x = hint(x, ICON_CIRCLE, "Back");
-    x = hint(x, ICON_SQUARE, view == VIEW_LIBRARY ? "Albums" : "Library");
+    x = hint(x, ICON_SQUARE, view == VIEW_LIBRARY ? (item_count && items[sel].photo >= 0 ? "Albums (hold: delete)" : "Albums") : "Library");
     if (view == VIEW_LIBRARY && item_count) {
         x = hint(x, ICON_TRIANGLE, "Next month");
         hint(x, ICON_CROSS, items[sel].video >= 0 ? "Play" : "View");
-    } else if (view == VIEW_ALBUMS && palbum_count) {
+    } else if (view == VIEW_ALBUMS && (palbum_count || trash_count)) {
         hint(x, ICON_CROSS, "Open");
     }
+    draw_delete_ui();
 }
