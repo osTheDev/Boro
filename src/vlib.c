@@ -478,6 +478,47 @@ static void grab(const u32 *src, int w, int h, void *ctx)
     g->done = 1;
 }
 
+// A picture saved next to the video (Name.jpg, as the Video Wizard writes),
+// center-cropped into the thumbnail. Returns 1 if there was one.
+static int sidecar_thumb(const Video *v, u32 *px)
+{
+    static const char *const ext[] = { ".jpg", ".jpeg", ".png", ".JPG", ".PNG" };
+    char path[300];
+    for (int e = 0; e < 5; e++) {
+        snprintf(path, sizeof(path), "%s", v->path);
+        char *dot = strrchr(path, '.');
+        if (!dot || (int)(dot - path) + 6 >= (int)sizeof(path)) return 0;
+        strcpy(dot, ext[e]);
+        SceIoStat st;
+        if (sceIoGetstat(path, &st) < 0) continue;
+        int w = 0, h = 0;
+        u8 *img = image_load(path, THUMB_H * 2, &w, &h);
+        if (!img) continue;
+        float want = (float)THUMB_W / THUMB_H;
+        int cw = w, ch = h, cx = 0, cy = 0;
+        if ((float)w / h > want) { cw = h * want; cx = (w - cw) / 2; }
+        else { ch = w / want; cy = (h - ch) / 2; }
+        for (int y = 0; y < THUMB_H; y++) {
+            int y0 = cy + y * ch / THUMB_H, y1 = cy + (y + 1) * ch / THUMB_H;
+            if (y1 <= y0) y1 = y0 + 1;
+            for (int x = 0; x < THUMB_W; x++) {
+                int x0 = cx + x * cw / THUMB_W, x1 = cx + (x + 1) * cw / THUMB_W;
+                if (x1 <= x0) x1 = x0 + 1;
+                u32 r = 0, g = 0, b = 0, n = 0;
+                for (int yy = y0; yy < y1; yy++)
+                    for (int xx = x0; xx < x1; xx++) {
+                        const u8 *c = img + (yy * w + xx) * 4;
+                        r += c[0]; g += c[1]; b += c[2]; n++;
+                    }
+                px[y * THUMB_W + x] = (r / n) | (g / n) << 8 | (b / n) << 16 | 0xFF000000;
+            }
+        }
+        free(img);
+        return 1;
+    }
+    return 0;
+}
+
 static void make_thumb(Video *v)
 {
     static u32 px[THUMB_W * THUMB_H];
@@ -487,7 +528,8 @@ static void make_thumb(Video *v)
         h.duration_ms = m.duration_ms;
         h.width = m.width;
         h.height = m.height;
-        if (avc_open(&m) == 0) {
+        if (sidecar_thumb(v, px)) h.has_pixels = 1;
+        else if (avc_open(&m) == 0) {
             SceUID fd = sceIoOpen(v->path, PSP_O_RDONLY, 0);
             int s = mp4_keyframe_before(&m, mp4_sample_at(&m.video, m.duration_ms / 10));
             u32 cap = 0;
