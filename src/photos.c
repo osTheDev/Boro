@@ -56,6 +56,8 @@ static int trash_open;     // Recently Deleted is open
 static int confirm;        // 1: move the photo to Recently Deleted, 2: delete for good
 static float hold_t;       // how long square has been held
 static int hold_fired;
+static char toast[96];      // a short note after delete or restore
+static float toast_t;
 
 #define TRASH_KEEP 4
 
@@ -246,23 +248,33 @@ static int albums_update(const Input *in)
 
 // Renames, or where the memory stick won't rename across folders, copies
 // and then removes the original once the copy is whole.
+// Returns 0, or the error code of the step that failed (for the note).
 static int move_file(const char *from, const char *to)
 {
     if (sceIoRename(from, to) >= 0) return 0;
     SceUID in = sceIoOpen(from, PSP_O_RDONLY, 0);
-    if (in < 0) return -1;
+    if (in < 0) return in;
     SceUID out = sceIoOpen(to, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
-    if (out < 0) { sceIoClose(in); return -1; }
+    if (out < 0) { sceIoClose(in); return out; }
     static u8 buf[128 * 1024];
-    int n, ok = 1;
-    while ((n = sceIoRead(in, buf, sizeof(buf))) > 0)
-        if (sceIoWrite(out, buf, n) != n) { ok = 0; break; }
-    if (n < 0) ok = 0;
+    int n, err = 0;
+    while ((n = sceIoRead(in, buf, sizeof(buf))) > 0) {
+        int w = sceIoWrite(out, buf, n);
+        if (w != n) { err = w < 0 ? w : -1; break; }
+    }
+    if (n < 0) err = n;
     sceIoClose(in);
     sceIoClose(out);
-    if (!ok) { sceIoRemove(to); return -1; }
-    sceIoRemove(from);
-    return 0;
+    if (err) { sceIoRemove(to); return err; }
+    int r = sceIoRemove(from);
+    return r < 0 ? r : 0;
+}
+
+static void note(const char *msg, int err)
+{
+    if (err) snprintf(toast, sizeof(toast), "%s (error %08X)", msg, (unsigned)err);
+    else snprintf(toast, sizeof(toast), "%s", msg);
+    toast_t = 3;
 }
 
 static void trash_dir(char *out, int size) { snprintf(out, size, "%s", plib_trash_dir()); }
@@ -324,7 +336,8 @@ static int trash_put(int photo)
     snprintf(t.orig, sizeof(t.orig), "%s", photos[photo].path);
     snprintf(t.name, sizeof(t.name), "%s", photos[photo].name);
     snprintf(t.file, sizeof(t.file), "%.200s/%02d%02d%02d%02d_%.63s", dir, now.day, now.hour, now.minute, now.second, photos[photo].name);
-    if (move_file(t.orig, t.file) < 0) return -1;
+    int err = move_file(t.orig, t.file);
+    if (err) { note("Couldn't delete it", err); return -1; }
     trash[trash_count++] = t;
     while (trash_count > TRASH_KEEP) trash_purge(0);
     trash_forget_textures();
@@ -334,12 +347,22 @@ static int trash_put(int photo)
 
 static void trash_restore(int i)
 {
-    if (move_file(trash[i].file, trash[i].orig) < 0) {
+    int err = move_file(trash[i].file, trash[i].orig);
+    const char *where = trash[i].orig;
+    char path[320];
+    if (err) {
         // Its folder is gone: back to the top of PICTURE instead.
-        char path[320];
         snprintf(path, sizeof(path), "%s/%s", plib_dir(), trash[i].name);
-        if (move_file(trash[i].file, path) < 0) return;
+        err = move_file(trash[i].file, path);
+        where = path;
     }
+    if (err) { note("Couldn't put it back", err); return; }
+    // Say where it went: by its date, it may sit far down the Library.
+    const char *pic = strstr(where, "PICTURE");
+    snprintf(toast, sizeof(toast), "Put back in %.80s", pic ? pic : where);
+    char *slash = strrchr(toast, '/');
+    if (slash && slash > toast + 12) *slash = 0;
+    toast_t = 3;
     memmove(&trash[i], &trash[i + 1], (trash_count - i - 1) * sizeof(Trashed));
     trash_count--;
     trash_forget_textures();
@@ -677,6 +700,12 @@ static void trash_draw(void)
 // The bar that fills while square is held, and the question after it.
 static void draw_delete_ui(void)
 {
+    if (toast_t > 0) {
+        toast_t -= 1.0f / 60;
+        float w = font_width(f_small, toast, 0) + 28, x = (SCREEN_W - w) / 2, y = SCREEN_H - 56;
+        ui_rrect(x, y, w, 24, 8, color_alpha(HEX(0x1A1C24, 240), toast_t > 1 ? 1 : toast_t));
+        font_draw_center(f_small, SCREEN_W / 2, y + 16, toast, color_alpha(TEXT, toast_t > 1 ? 1 : toast_t));
+    }
     if (hold_t > 0.3f && !hold_fired && deletable() >= 0) {
         float k = hold_t / 2 > 1 ? 1 : hold_t / 2, w = 220, x = (SCREEN_W - w) / 2, y = SCREEN_H - 56;
         ui_rrect(x, y, w, 30, 8, HEX(0x1A1C24, 240));
