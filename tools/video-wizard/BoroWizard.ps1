@@ -104,7 +104,7 @@ function New-Item-For([string]$path) {
     $base = [IO.Path]::GetFileNameWithoutExtension($path)
     $it = @{ Src = $path; Shelf = 0; Title = ''; Show = ''; Season = 1; Episode = 1
              Poster = 'frame'; FramePage = 0; FrameSel = 1; Frames = @{}; Times = @{}; Own = $null
-             Duration = -1.0; Clip = $null; NoFrames = $false; Status = ''; EpGuessed = $false }
+             Duration = -1.0; Clip = $null; NoFrames = $false; Status = ''; EpGuessed = $false; Part = $null }
     if ($base -match '^(.*?)[\s._\-]*[Ss](\d{1,2})[\s._]?[Ee](\d{1,3})(.*)$' -or
         $base -match '^(.*?)[\s._\-]+(\d{1,2})x(\d{2,3})(.*)$') {
         $it.Shelf = 1
@@ -355,10 +355,13 @@ function Get-Frame($it, [double]$sec) {
 function Get-Frames($it, [int]$page) {
     if ($it.Frames.ContainsKey($page)) { return }
     $d = Get-Duration $it
+    $off = 0.0
+    # A part of a split file: frames from its own stretch.
+    if ($d -gt 0 -and $it.Part) { $off = $it.Part.Start; $d = $(if ($it.Part.Len -gt 0) { [Math]::Min($it.Part.Len, $d - $off) } else { $d - $off }) }
     $imgs = @(); $times = @()
     for ($i = 0; $i -lt 5; $i++) {
         $sec = 0.0
-        if ($d -gt 0) { $sec = $d * ($page * 5 + $i + 1) / ($FramePages * 5 + 1) }
+        if ($d -gt 0) { $sec = $off + $d * ($page * 5 + $i + 1) / ($FramePages * 5 + 1) }
         $times += $sec
         if ($d -gt 0) { $imgs += , (Get-Frame $it $sec) } else { $imgs += , $null }
     }
@@ -682,7 +685,7 @@ $Table.HeaderStyle = 'Nonclickable'
 $P2.Controls.Add($Table)
 # Batch tools: they work on the selected rows, or every TV row when one or none is selected.
 $TvBtn = New-Button 'Make them a TV show...' 0 104 150 19; $P2.Controls.Add($TvBtn)
-$TvNote = New-Label 'All rows, or just the ones you select.' 156 106 210; $TvNote.ForeColor = $Dim; $P2.Controls.Add($TvNote)
+$SplitBtn = New-Button 'Split into episodes...' 156 104 130 19; $P2.Controls.Add($SplitBtn)
 $P2.Controls.Add((New-Label 'Shelf:' 0 126 366 $Bold))
 $Radios = @()
 $rx = @(0, 62, 152, 252)
@@ -724,7 +727,9 @@ function Update-Row($row) {
 function Fill-Table {
     $Table.BeginUpdate(); $Table.Items.Clear()
     foreach ($it in $Items) {
-        $row = New-Object Windows.Forms.ListViewItem((Split-Path $it.Src -Leaf))
+        $file = Split-Path $it.Src -Leaf
+        if ($it.Part) { $file = "$file  (part $($it.Part.N))" }
+        $row = New-Object Windows.Forms.ListViewItem($file)
         [void]$row.SubItems.Add(''); [void]$row.SubItems.Add('')
         $row.Tag = $it
         Update-Row $row
@@ -889,6 +894,187 @@ function Show-TvDialog {
     }
 }
 $TvBtn.Add_Click({ Show-TvDialog })
+
+# ---- Splitting one file into episodes ----
+
+# A file's length and chapters (start and length in seconds), from HandBrake's scan.
+function Scan-Chapters([string]$path) {
+    $res = @{ Duration = 0.0; Chapters = @() }
+    try {
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = $HandBrake; $psi.Arguments = ('-i "{0}" --scan -t 1 --json' -f $path)
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $p = [Diagnostics.Process]::Start($psi)
+        $out = $p.StandardOutput.ReadToEndAsync(); $null = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(90000)) { try { $p.Kill() } catch { } }
+        $text = $out.Result
+        $at = $text.IndexOf('JSON Title Set:')
+        if ($at -lt 0) { return $res }
+        # The JSON object after the marker, by matching braces.
+        $start = $text.IndexOf('{', $at); $depth = 0; $end = -1; $inStr = $false
+        for ($i = $start; $i -lt $text.Length; $i++) {
+            $c = $text[$i]
+            if ($inStr) { if ($c -eq '\') { $i++ } elseif ($c -eq '"') { $inStr = $false }; continue }
+            if ($c -eq '"') { $inStr = $true } elseif ($c -eq '{') { $depth++ } elseif ($c -eq '}') { $depth--; if ($depth -eq 0) { $end = $i; break } }
+        }
+        if ($end -lt 0) { return $res }
+        $j = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
+        $t = $j.TitleList[0]
+        $secs = { param($x) if ($x.Ticks) { $x.Ticks / 90000.0 } else { $x.Hours * 3600 + $x.Minutes * 60 + $x.Seconds } }
+        $res.Duration = & $secs $t.Duration
+        $at = 0.0
+        foreach ($c in $t.ChapterList) {
+            $len = & $secs $c.Duration
+            $res.Chapters += @{ Start = $at; Len = $len; Name = [string]$c.Name }
+            $at += $len
+        }
+    } catch { Write-Log "Couldn't scan chapters of ${path}: $($_.Exception.Message)" }
+    return $res
+}
+
+function Parse-Time([string]$s) {
+    $parts = $s.Trim().Split(':')
+    $v = 0.0
+    foreach ($x in $parts) { $v = $v * 60 + [double]::Parse($x, [Globalization.CultureInfo]::InvariantCulture) }
+    return $v
+}
+
+function Show-SplitDialog {
+    $it = Selected-Item
+    if (-not $it) { return }
+    $src = $it.Src
+    $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor
+    $scan = Scan-Chapters $src
+    $Form.Cursor = [Windows.Forms.Cursors]::Default
+    $chs = @($scan.Chapters)
+
+    $d = New-Object Windows.Forms.Form
+    $d.Text = 'Split into episodes'; $d.ClientSize = New-Object Drawing.Size(400, 360)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'; $d.BackColor = $Gray; $d.Font = $Font
+    $d.Controls.Add((New-Label (Split-Path $src -Leaf) 10 8 380 $Bold))
+    $what = New-Label '' 10 26 380; $d.Controls.Add($what)
+    $list = New-Object Windows.Forms.CheckedListBox
+    $list.Location = New-Object Drawing.Point(10, 46); $list.Size = New-Object Drawing.Size(380, 130)
+    $list.CheckOnClick = $true; $list.IntegralHeight = $false
+    $d.Controls.Add($list)
+    foreach ($c in $chs) {
+        $nm = $c.Name; if (-not $nm) { $nm = '' }
+        [void]$list.Items.Add(("{0,-9} ({1})  {2}" -f (Format-Time $c.Start), (Format-Time $c.Len), $nm))
+    }
+    if ($chs.Count) { $what.Text = "Tick each chapter where an episode starts. $($chs.Count) chapters, $(Format-Time $scan.Duration) in all." }
+    else { $what.Text = 'No chapters in this file. Type where each episode starts below.'; $list.Enabled = $false }
+
+    $d.Controls.Add((New-Label 'Episodes are about' 10 184 104))
+    $mins = New-Object Windows.Forms.NumericUpDown
+    $mins.Location = New-Object Drawing.Point(116, 182); $mins.Size = New-Object Drawing.Size(44, 21); $mins.Minimum = 1; $mins.Maximum = 180; $mins.Value = 24
+    $d.Controls.Add($mins)
+    $d.Controls.Add((New-Label 'min long.' 164 184 56))
+    $guess = New-Button 'Guess' 222 181 60 21; $d.Controls.Add($guess)
+
+    $d.Controls.Add((New-Label 'Episodes start at (h:mm:ss, comma between):' 10 212 380 $Bold))
+    $times = New-Object Windows.Forms.TextBox
+    $times.Location = New-Object Drawing.Point(10, 228); $times.Size = New-Object Drawing.Size(380, 21)
+    $d.Controls.Add($times)
+    $d.Controls.Add((New-Label 'Show:' 10 258 40))
+    $show = New-Object Windows.Forms.TextBox
+    $show.Location = New-Object Drawing.Point(52, 256); $show.Size = New-Object Drawing.Size(170, 21)
+    $show.Text = $(if ($it.Show.Trim()) { $it.Show.Trim() } else { $it.Title.Trim() })
+    $d.Controls.Add($show)
+    $d.Controls.Add((New-Label 'Season:' 230 258 46))
+    $season = New-Object Windows.Forms.NumericUpDown
+    $season.Location = New-Object Drawing.Point(276, 256); $season.Size = New-Object Drawing.Size(40, 21); $season.Minimum = 1; $season.Maximum = 99
+    $d.Controls.Add($season)
+    $d.Controls.Add((New-Label 'First ep:' 322 258 46))
+    $first = New-Object Windows.Forms.NumericUpDown
+    $first.Location = New-Object Drawing.Point(322, 274); $first.Size = New-Object Drawing.Size(48, 21); $first.Minimum = 1; $first.Maximum = 999
+    $d.Controls.Add($first)
+    $titles = New-Object Windows.Forms.CheckBox
+    $titles.Text = 'Get episode titles from TVmaze'; $titles.Location = New-Object Drawing.Point(10, 290); $titles.AutoSize = $true; $titles.Checked = $true
+    $d.Controls.Add($titles)
+    $ok = New-Button 'Split' 234 326; $ok.DialogResult = 'OK'; $d.Controls.Add($ok)
+    $no = New-Button 'Cancel' 315 326; $no.DialogResult = 'Cancel'; $d.Controls.Add($no); $d.CancelButton = $no
+
+    # Ticks write the start times; typing your own switches to times.
+    $st = @{ FromTicks = $false; Busy = $false }
+    $list.Add_ItemCheck({
+        param($s, $e)
+        # Fires before the tick changes, so work out the new set here.
+        $on = @($list.CheckedIndices | ForEach-Object { [int]$_ } | Where-Object { $_ -ne $e.Index })
+        if ($e.NewValue -eq 'Checked') { $on += $e.Index }
+        $st.Busy = $true
+        $times.Text = (@($on | Sort-Object | ForEach-Object { Format-Time $chs[$_].Start }) -join ', ')
+        $st.FromTicks = $true; $st.Busy = $false
+    })
+    $times.Add_TextChanged({ if (-not $st.Busy) { $st.FromTicks = $false } })
+    $guess.Add_Click({
+        $len = [double]$mins.Value * 60
+        if ($chs.Count) {
+            # The chapter starting nearest each multiple of the episode length.
+            for ($i = 0; $i -lt $chs.Count; $i++) { $list.SetItemChecked($i, $false) }
+            $list.SetItemChecked(0, $true)
+            $last = 0
+            for ($t = $len; $t -lt $scan.Duration - $len / 3; $t += $len) {
+                $best = 0
+                for ($i = 0; $i -lt $chs.Count; $i++) { if ([Math]::Abs($chs[$i].Start - $t) -lt [Math]::Abs($chs[$best].Start - $t)) { $best = $i } }
+                if ($best -gt $last) {
+                    $list.SetItemChecked($best, $true)
+                    $t = $chs[$best].Start    # count on from where the episode really started
+                    $last = $best
+                }
+            }
+        } else {
+            $total = Get-Duration $it
+            $ts = @(); for ($t = 0.0; $t -lt $total - $len / 3 -or $ts.Count -eq 0; $t += $len) { $ts += Format-Time $t; if ($total -le 0) { break } }
+            $times.Text = $ts -join ', '
+        }
+    })
+    # Every chapter about episode-length: every chapter is an episode.
+    if ($chs.Count -ge 2 -and -not ($chs | Where-Object { $_.Len -lt 600 })) { for ($i = 0; $i -lt $chs.Count; $i++) { $list.SetItemChecked($i, $true) } }
+    elseif ($chs.Count) { $list.SetItemChecked(0, $true) }
+
+    if ($d.ShowDialog($Form) -ne 'OK') { return }
+    $parts = @()
+    if ($st.FromTicks -and $list.CheckedIndices.Count) {
+        $starts = @($list.CheckedIndices | ForEach-Object { [int]$_ })
+        for ($k = 0; $k -lt $starts.Count; $k++) {
+            $a = $starts[$k]; $b = $(if ($k + 1 -lt $starts.Count) { $starts[$k + 1] - 1 } else { $chs.Count - 1 })
+            $len = 0.0; for ($i = $a; $i -le $b; $i++) { $len += $chs[$i].Len }
+            $parts += @{ Chapters = "$($a + 1)-$($b + 1)"; Start = $chs[$a].Start; Len = $len }
+        }
+    } else {
+        try { $ts = @($times.Text.Split(',') | Where-Object { $_.Trim() } | ForEach-Object { Parse-Time $_ } | Sort-Object) }
+        catch { [Windows.Forms.MessageBox]::Show("Those times can't be read. Use h:mm:ss, like 0:00, 23:40, 47:10.", 'Boro Video Wizard', 'OK', 'Warning') | Out-Null; return }
+        for ($k = 0; $k -lt $ts.Count; $k++) {
+            $len = $(if ($k + 1 -lt $ts.Count) { $ts[$k + 1] - $ts[$k] } else { 0.0 })   # 0: to the end
+            $parts += @{ Chapters = ''; Start = [double]$ts[$k]; Len = [double]$len }
+        }
+    }
+    if ($parts.Count -lt 2) { [Windows.Forms.MessageBox]::Show('Pick at least two episode starts.', 'Boro Video Wizard', 'OK', 'Information') | Out-Null; return }
+
+    $name = $show.Text.Trim()
+    $map = $null
+    if ($titles.Checked -and $name) { $Form.Cursor = [Windows.Forms.Cursors]::WaitCursor; $map = Find-Episodes $name; $Form.Cursor = [Windows.Forms.Cursors]::Default }
+    $new = @()
+    for ($k = 0; $k -lt $parts.Count; $k++) {
+        $x = New-Item-For $src
+        $x.Shelf = 1; $x.Show = $name; $x.Season = [int]$season.Value; $x.Episode = [int]$first.Value + $k; $x.EpGuessed = $true
+        $x.Title = ''
+        $key = "$($x.Season)x$($x.Episode)"
+        if ($map -and $map.ContainsKey($key) -and $map[$key]) { $x.Title = Safe-Name $map[$key] }
+        $parts[$k].N = $k + 1
+        $x.Part = $parts[$k]
+        $new += $x
+    }
+    # Swap the one row for its parts, in place.
+    $at = $Items.IndexOf($it)
+    $Items.RemoveAt($at)
+    for ($k = $new.Count - 1; $k -ge 0; $k--) { $Items.Insert($at, $new[$k]) }
+    $All[$src] = $new
+    Fill-Table
+}
+$SplitBtn.Add_Click({ Show-SplitDialog })
 foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor 'shelf' } }) }
 $ShowBox.Add_TextChanged({ Save-Editor 'show' }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor 'show' })
 $SeasonBox.Add_ValueChanged({ Save-Editor 'season' }); $EpBox.Add_ValueChanged({ Save-Editor 'episode' })
@@ -1112,6 +1298,12 @@ function Start-Next {
         '-a', '1', '-E', 'av_aac', '-B', '128', '--mixdown', 'stereo', '-R', '44.1',
         '--subtitle', 'none'
     )
+    if ($it.Part -and $it.Part.Chapters) { $hb += @('-c', $it.Part.Chapters) }
+    elseif ($it.Part) {
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        $hb += @('--start-at', ('seconds:' + $it.Part.Start.ToString('0.##', $inv)))
+        if ($it.Part.Len -gt 0) { $hb += @('--stop-at', ('seconds:' + $it.Part.Len.ToString('0.##', $inv))) }
+    }
     # Through cmd so its output goes to files the timer reads, with no window.
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = "$env:SystemRoot\System32\cmd.exe"
@@ -1165,6 +1357,10 @@ function File-Item($it, [string]$converted) {
             try { Save-Jpeg $cv.Img $coverPath 400 } catch { Write-Log "Couldn't save $coverPath" }
         }
     }
+    # A split file stays put until its last part is done.
+    $others = @($Items | Where-Object { $_.Src -eq $it.Src -and -not [object]::ReferenceEquals($_, $it) -and
+        $_.Status -ne 'done' -and $_.Status -ne 'failed' })
+    if ($others.Count) { Write-Log "Filed $dest"; return }
     New-Item -ItemType Directory -Force -Path $script:Originals | Out-Null
     Move-Item -LiteralPath $it.Src -Destination (Unique-Path (Join-Path $script:Originals (Split-Path $it.Src -Leaf)))
     Write-Log "Filed $dest"
@@ -1289,7 +1485,7 @@ function Take-Ticked {
     foreach ($i in $FileList.CheckedIndices) {
         $path = $script:Files[$i]
         if (-not $All.ContainsKey($path)) { $All[$path] = New-Item-For $path }
-        [void]$Items.Add($All[$path])
+        foreach ($x in @($All[$path])) { [void]$Items.Add($x) }   # a split file is several items
     }
 }
 

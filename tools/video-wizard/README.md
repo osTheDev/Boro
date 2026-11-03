@@ -21,7 +21,11 @@ them a poster, and it converts and files them the way Boro sorts them.
    For a batch of episodes press **Make them a TV show...**: type the show
    once, pick the season, keep the episode numbers from the file names (or
    number them in list order) and get the titles from TVmaze. It works on all
-   rows, or just the ones you select. Files named only "Episode 3" take the
+   rows, or just the ones you select.
+   One file holding several episodes? Select it and press **Split into
+   episodes...**: tick the chapters where episodes start (or let **Guess** do
+   it from the episode length), or type start times if it has no chapters.
+   Each part becomes its own episode. Files named only "Episode 3" take the
    folder's name as the show.
    - **Movie** -> `VIDEO\Movies\<Title>.mp4`
    - **TV episode** -> `VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Title>.mp4`
