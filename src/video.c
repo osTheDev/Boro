@@ -31,10 +31,10 @@
 #define TILE_W 96
 #define TILE_H 54
 #define TILE_GAP 10
+#define GRID_COLS 4
 
 enum { TAB_HOME, TAB_TVM, TAB_MUSIC, TAB_PHOTOS, TAB_COUNT };
 static const char *const tab_names[TAB_COUNT] = { "Home", "TV & Movies", "Music Videos", "Photos" };
-static const char *const cat_names[VCAT_COUNT] = { "Videos", "Movies", "Music video", "Clips", "Shows" };
 
 static Font *f_tab, *f_tab_b, *f_title, *f_hero, *f_small, *f_small_b, *f_tiny, *f_chip, *f_time;
 static Texture *t_fill12, *t_dot;
@@ -401,6 +401,9 @@ static int browser_update(const Input *in, float dt)
     if (!list_count) return 0;
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
     if (nav & PSP_CTRL_RIGHT && sel < list_count - 1) sel++;
+    if (nav & PSP_CTRL_UP && sel >= GRID_COLS) sel -= GRID_COLS;
+    if (nav & PSP_CTRL_DOWN && sel + GRID_COLS < list_count) sel += GRID_COLS;
+    else if (nav & PSP_CTRL_DOWN && sel / GRID_COLS < (list_count - 1) / GRID_COLS) sel = list_count - 1;
     Video *v = &videos[list[sel]];
     if (p & PSP_CTRL_CROSS) start(list[sel], resume_of(v));
     else if (p & PSP_CTRL_TRIANGLE) start(list[sel], 0);
@@ -420,13 +423,6 @@ static void draw_thumb(int index, float x, float y, float w, float h)
         u32 mid = color_lerp(c0, c1, 0.5f);
         gfx_gradient(x, y, w, h, c0, mid, mid, c1);
     }
-}
-
-static void draw_badge(float right, float y, const char *s)
-{
-    float w = font_width(f_chip, s, 0) + 10;
-    ui_rrect(right - w, y, w, 13, 3, RGBA(0, 0, 0, 153));
-    font_draw(f_chip, right - w + 5, y + 10, s, TEXT, 0);
 }
 
 static void draw_top_bar(void)
@@ -451,91 +447,6 @@ static void draw_top_bar(void)
     ui_battery(f_small, right, base - 4, MUTED);
     const char *sort = sort_az ? "A\xE2\x80\x93Z" : "Recent";
     if (tab == TAB_TVM || tab == TAB_MUSIC) font_draw_right(f_small, right - 62, base, sort, DIM);
-}
-
-static void draw_hero(void)
-{
-    Video *v = &videos[list[sel]];
-    draw_thumb(list[sel], HERO_X, HERO_Y, HERO_W, HERO_H);
-    float cx = HERO_X + HERO_W / 2, cy = HERO_Y + HERO_H / 2;
-    gfx_nine(t_dot, 18, cx - 18, cy - 18, 36, 36, RGBA(0, 0, 0, 115));
-    ui_icon(ICON_PLAY, cx - 7, cy - 8, 16, 0xFFFFFFFF);
-    if (resume_of(v) && v->duration_ms) {
-        gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W, 4, RGBA(255, 255, 255, 51));
-        gfx_rect(HERO_X, HERO_Y + HERO_H - 4, HERO_W * (float)resume_of(v) / v->duration_ms, 4, ACCENT);
-    }
-    ui_round_corners(HERO_X, HERO_Y, HERO_W, HERO_H, 8, BG);
-    char buf[64];
-    if (v->duration_ms) {
-        ui_format_time(buf, sizeof(buf), v->duration_ms);
-        draw_badge(HERO_X + HERO_W - 6, HERO_Y + 6, buf);
-    }
-
-    float x = HERO_X + HERO_W + 14, w = SCREEN_W - 14 - x;
-    // Two lines for long titles.
-    const char *t = v->title;
-    if (font_width(f_title, t, 0) <= w) {
-        font_draw(f_title, x, HERO_Y + 15, t, TEXT, 0);
-    } else {
-        char line[96];
-        int n = strlen(t), cut = 0;
-        for (int i = 1; i <= n; i++) {
-            if (t[i] != ' ' && t[i]) continue;
-            snprintf(line, sizeof(line), "%.*s", i, t);
-            if (font_width(f_title, line, 0) > w) break;
-            cut = i;
-        }
-        if (!cut) cut = n / 2;
-        snprintf(line, sizeof(line), "%.*s", cut, t);
-        font_draw(f_title, x, HERO_Y + 15, line, TEXT, 0);
-        font_draw_fit(f_title, x, HERO_Y + 34, t + cut + (t[cut] == ' '), TEXT, w);
-    }
-    float y = HERO_Y + (font_width(f_title, t, 0) <= w ? 33 : 52);
-    if (v->width) snprintf(buf, sizeof(buf), "%s \xC2\xB7 MP4 \xC2\xB7 %d\xC3\x97%d", cat_names[v->category], v->width, v->height);
-    else snprintf(buf, sizeof(buf), "%s \xC2\xB7 MP4", cat_names[v->category]);
-    font_draw_fit(f_small, x, y, buf, MUTED, w);
-    char when[24];
-    if (resume_of(v)) {
-        ui_format_time(when, sizeof(when), resume_of(v));
-        snprintf(buf, sizeof(buf), "Stopped at %s", when);
-    } else {
-        snprintf(buf, sizeof(buf), v->watched ? "Watched" : "Not watched yet");
-    }
-    font_draw(f_small, x, y + 15, buf, HEX(0xC9CBD4, 255), 0);
-
-    float by = HERO_Y + HERO_H - 22;
-    const char *first = resume_of(v) ? "Resume" : "Play";
-    float bw = font_width(f_small_b, first, 0) + 20;
-    gfx_nine(t_fill12, 12, x, by, bw, 22, ACCENT);
-    font_draw(f_small_b, x + 10, by + 15, first, BG, 0);
-    if (resume_of(v)) {
-        float x2 = x + bw + 6, bw2 = font_width(f_small_b, "Start over", 0) + 20;
-        gfx_nine(t_fill12, 12, x2, by, bw2, 22, PILL);
-        font_draw(f_small_b, x2 + 10, by + 15, "Start over", TEXT, 0);
-    }
-}
-
-static void draw_row(float dt)
-{
-    // Keep the selection second from the left once the row scrolls.
-    float target = sel > 0 ? sel - 1 : 0;
-    scroll = ui_approach(scroll, target, dt, 14);
-    gfx_clip(0, ROW_Y - 4, SCREEN_W, TILE_H + 24);
-    for (int i = 0; i < list_count; i++) {
-        float x = 14 + (i - scroll) * (TILE_W + TILE_GAP);
-        if (x > SCREEN_W || x + TILE_W < 0) continue;
-        if (i == sel) ui_rrect(x - 3, ROW_Y - 3, TILE_W + 6, TILE_H + 6, 8, ACCENT);
-        if (i == sel) ui_rrect(x - 1, ROW_Y - 1, TILE_W + 2, TILE_H + 2, 7, BG);
-        draw_thumb(list[i], x, ROW_Y, TILE_W, TILE_H);
-        const Video *v = &videos[list[i]];
-        if (resume_of(v) && v->duration_ms) {
-            gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W, 3, RGBA(255, 255, 255, 51));
-            gfx_rect(x, ROW_Y + TILE_H - 3, TILE_W * (float)resume_of(v) / v->duration_ms, 3, ACCENT);
-        }
-        ui_round_corners(x, ROW_Y, TILE_W, TILE_H, 6, BG);
-        font_draw_fit(f_tiny, x, ROW_Y + TILE_H + 13, v->title, i == sel ? TEXT : MUTED, TILE_W);
-    }
-    gfx_unclip();
 }
 
 static void draw_hints(int glyphs[], const char *labels[], int n, float right, float base, u32 color)
@@ -860,6 +771,43 @@ static void show_draw(float dt)
     gfx_end();
 }
 
+// "Artist - Song" names split in two; the artist is "" when there's no dash.
+static void split_name(const char *t, char *artist, int asize, char *song, int ssize)
+{
+    const char *d = strstr(t, " - ");
+    if (!d) { *artist = 0; snprintf(song, ssize, "%s", t); return; }
+    snprintf(artist, asize, "%.*s", (int)(d - t), t);
+    snprintf(song, ssize, "%s", d + 3);
+}
+
+// Music Videos: a grid of thumbnails, scrolling a row at a time.
+static void draw_grid(float dt)
+{
+    float tw = 104, th = 58, gx = 10, rh = th + 30, top = 36;
+    int row = sel / GRID_COLS, rows_n = (list_count + GRID_COLS - 1) / GRID_COLS;
+    float target = row > 0 ? row - 1 : 0;
+    if (target > rows_n - 2) target = rows_n - 2 > 0 ? rows_n - 2 : 0;
+    scroll = ui_approach(scroll, target, dt, 14);
+    gfx_clip(0, 28, SCREEN_W, SCREEN_H - 28 - 20);
+    char artist[96], song[96];
+    for (int i = 0; i < list_count; i++) {
+        float x = 17 + (i % GRID_COLS) * (tw + gx), y = top + (i / GRID_COLS - scroll) * rh;
+        if (y > SCREEN_H || y + rh < 28) continue;
+        const Video *v = &videos[list[i]];
+        int on = i == sel;
+        if (on) ui_rrect(x - 3, y - 3, tw + 6, th + 6, 8, ACCENT);
+        if (on) ui_rrect(x - 1, y - 1, tw + 2, th + 2, 7, BG);
+        draw_thumb(list[i], x, y, tw, th);
+        draw_progress(x, y + th - 3, tw, v);
+        ui_round_corners(x, y, tw, th, 6, BG);
+        split_name(v->title, artist, sizeof(artist), song, sizeof(song));
+        font_draw_fit(f_tiny, x, y + th + 12, song, on ? TEXT : MUTED, tw);
+        if (*artist) font_draw_fit(f_chip, x, y + th + 23, artist, DIM, tw);
+    }
+    gfx_unclip();
+    gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
+}
+
 static void browser_draw(float dt)
 {
     if (tab == TAB_PHOTOS && photos_viewing()) {
@@ -891,8 +839,7 @@ static void browser_draw(float dt)
         const char *l[] = { "Back" };
         draw_hints(g, l, 1, SCREEN_W - 14, SCREEN_H - 8, MUTED);
     } else {
-        draw_hero();
-        draw_row(dt);
+        draw_grid(dt);
         int resume = resume_of(&videos[list[sel]]) != 0;
         int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, ICON_CIRCLE };
         const char *l[] = { resume ? "Resume" : "Play", "Start over", "Sort", "Back" };
