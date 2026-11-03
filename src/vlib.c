@@ -261,8 +261,9 @@ const Texture *vlib_show_poster(int show)
     snprintf(a, sizeof(a), "%s/cover", shows[show].dir);
     snprintf(b, sizeof(b), "%s/poster", shows[show].dir);
     snprintf(c, sizeof(c), "%s/folder", shows[show].dir);
-    const char *const stems[] = { a, b, c };
-    return poster(stems, 3);
+    // Or a picture named after the show beside its folder (Anime/<Show>.jpg).
+    const char *const stems[] = { a, b, c, shows[show].dir };
+    return poster(stems, 4);
 }
 
 const Texture *vlib_video_poster(int index)

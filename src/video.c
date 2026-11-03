@@ -273,7 +273,8 @@ static void open_show(int show)
 {
     static int all[512];
     show_open = show;
-    int n = vlib_episodes(show, all, 512), next = vlib_next_up(show);
+    // Opens on the first episode; the Next Up line still says where you left off.
+    int n = vlib_episodes(show, all, 512), next = n ? all[0] : -1;
     season_count = 0;
     for (int i = 0; i < n; i++) {
         int sn = videos[all[i]].season, dup = 0;
