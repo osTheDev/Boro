@@ -5,13 +5,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "font.h"
 #include "gfx.h"
 #include "ui.h"
 
 #define DIR "ms0:/SEPLUGINS/"
 #define INI DIR "boro.ini"
-#define LIST DIR "PLUGINS.TXT"
+// ARK reads its plugin list from SEPLUGINS and from its own folder.
+static const char *const lists[] = { DIR "PLUGINS.TXT", "ms0:/PSP/SAVEDATA/ARK_01234/PLUGINS.TXT" };
+#define LISTS 2
 #define STATUS_STATE DIR "boro_status.txt"
 
 enum { BRIGHT, STATUS, HOLD, SNAP, PLUGINS };
@@ -89,11 +92,19 @@ static char *ini_find(char *buf, const char *section, const char *key)
     return NULL;
 }
 
+static const char *find_ci(const char *hay, const char *needle)
+{
+    int n = strlen(needle);
+    for (; *hay; hay++)
+        if (!strncasecmp(hay, needle, n)) return hay;
+    return NULL;
+}
+
 // Plugin list lines look like "game, ms0:/SEPLUGINS/boro_snap.prx, on".
 static int list_enabled(const char *list, const char *file)
 {
     int on = 0;
-    for (const char *p = list; p && (p = strstr(p, file)); p += strlen(file)) {
+    for (const char *p = list; p && (p = find_ci(p, file)); p += strlen(file)) {
         const char *eol = strchr(p, '\n');
         const char *comma = strchr(p, ',');
         if (comma && (!eol || comma < eol)) {
@@ -107,12 +118,14 @@ static int list_enabled(const char *list, const char *file)
 static void load(void)
 {
     int len;
-    char *list = read_all(LIST, &len), *ini = read_all(INI, &len);
+    char *list[LISTS], *ini = read_all(INI, &len);
+    for (int l = 0; l < LISTS; l++) list[l] = read_all(lists[l], &len);
     for (int i = 0; i < PLUGINS; i++) {
         char path[64];
         snprintf(path, sizeof(path), DIR "%s", files[i]);
         installed[i] = exists(path);
-        enabled[i] = list && list_enabled(list, files[i]);
+        enabled[i] = 0;
+        for (int l = 0; l < LISTS; l++) enabled[i] |= list[l] && list_enabled(list[l], files[i]);
     }
     for (int i = 0; i < ROW_COUNT; i++) {
         const Row *r = &rows[i];
@@ -124,7 +137,7 @@ static void load(void)
         }
         knob[i] = value[i];
     }
-    free(list);
+    for (int l = 0; l < LISTS; l++) free(list[l]);
     free(ini);
 }
 
@@ -158,19 +171,21 @@ static void save_option(const Row *r, int on)
     }
 }
 
-static void save_enabled(int plugin, int on)
+// Rewrites the on/off field of the plugin's lines in one list. Returns
+// whether the list had any.
+static int rewrite_list(const char *path, int plugin, int on)
 {
-    int len;
-    char *list = read_all(LIST, &len);
-    char *out = malloc(len + 160);
-    if (!out) { free(list); return; }
-    int n = 0, found = 0;
-    for (char *line = list; line && *line;) {
+    int len, n = 0, found = 0;
+    char *list = read_all(path, &len);
+    if (!list) return 0;
+    char *out = malloc(len + 16 * 4 + 1);
+    if (!out) { free(list); return 0; }
+    for (char *line = list; *line;) {
         char *eol = strchr(line, '\n');
         int ll = eol ? eol - line + 1 : (int)strlen(line);
-        char *hit = strstr(line, files[plugin]);
+        const char *hit = find_ci(line, files[plugin]);
         if (hit && hit < line + ll) {
-            // Rewrite the last field, keeping the line's own ending.
+            // Keep everything up to the last comma, and the line's own ending.
             char *last = line + ll;
             while (last > line && (last[-1] == '\n' || last[-1] == '\r')) last--;
             char *comma = last;
@@ -183,11 +198,27 @@ static void save_enabled(int plugin, int on)
         }
         line += ll;
     }
-    if (!found && on) {
-        if (n && out[n - 1] != '\n') out[n++] = '\n';
-        n += sprintf(out + n, "vsh, " DIR "%s, on\ngame, " DIR "%s, on\n", files[plugin], files[plugin]);
-    }
-    write_all(LIST, out, n);
+    if (found) write_all(path, out, n);
+    free(out);
+    free(list);
+    return found;
+}
+
+// Updates the plugin's lines wherever they are; adds them to SEPLUGINS only
+// when no list has them yet.
+static void save_enabled(int plugin, int on)
+{
+    int found = 0;
+    for (int l = 0; l < LISTS; l++) found |= rewrite_list(lists[l], plugin, on);
+    if (found || !on) return;
+    int len;
+    char *list = read_all(lists[0], &len);
+    char *out = malloc(len + 160);
+    if (!out) { free(list); return; }
+    int n = list ? sprintf(out, "%s", list) : 0;
+    if (n && out[n - 1] != '\n') out[n++] = '\n';
+    n += sprintf(out + n, "vsh, " DIR "%s, on\ngame, " DIR "%s, on\n", files[plugin], files[plugin]);
+    write_all(lists[0], out, n);
     free(out);
     free(list);
 }
