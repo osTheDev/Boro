@@ -31,6 +31,7 @@ extern int palbum_count;
 
 void plib_init(const char *data_dir, const char *picture_dir);
 const char *plib_dir(void); // like ms0:/PICTURE
+const char *plib_trash_dir(void); // where deleted photos wait, in Boro's data folder
 void plib_scan(void);
 
 void plib_thumbs(int on);

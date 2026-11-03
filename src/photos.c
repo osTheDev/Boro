@@ -239,12 +239,33 @@ static int albums_update(const Input *in)
 
 // ---- Recently Deleted -------------------------------------------------------------
 //
-// Deleted photos move to PICTURE/.trash (hidden from the scan by its dot);
+// Deleted photos move to Boro's data/trash folder, out of PICTURE;
 // list.txt there holds "file<TAB>original path", oldest first. Only the last
 // TRASH_KEEP stay: a newer one deletes the oldest for good.
 
 
-static void trash_dir(char *out, int size) { snprintf(out, size, "%s/.trash", plib_dir()); }
+// Renames, or where the memory stick won't rename across folders, copies
+// and then removes the original once the copy is whole.
+static int move_file(const char *from, const char *to)
+{
+    if (sceIoRename(from, to) >= 0) return 0;
+    SceUID in = sceIoOpen(from, PSP_O_RDONLY, 0);
+    if (in < 0) return -1;
+    SceUID out = sceIoOpen(to, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    if (out < 0) { sceIoClose(in); return -1; }
+    static u8 buf[128 * 1024];
+    int n, ok = 1;
+    while ((n = sceIoRead(in, buf, sizeof(buf))) > 0)
+        if (sceIoWrite(out, buf, n) != n) { ok = 0; break; }
+    if (n < 0) ok = 0;
+    sceIoClose(in);
+    sceIoClose(out);
+    if (!ok) { sceIoRemove(to); return -1; }
+    sceIoRemove(from);
+    return 0;
+}
+
+static void trash_dir(char *out, int size) { snprintf(out, size, "%s", plib_trash_dir()); }
 
 static void trash_save(void)
 {
@@ -297,14 +318,13 @@ static int trash_put(int photo)
 {
     char dir[320];
     trash_dir(dir, sizeof(dir));
-    sceIoMkdir(dir, 0777);
     ScePspDateTime now;
     sceRtcGetCurrentClockLocalTime(&now);
     Trashed t;
     snprintf(t.orig, sizeof(t.orig), "%s", photos[photo].path);
     snprintf(t.name, sizeof(t.name), "%s", photos[photo].name);
     snprintf(t.file, sizeof(t.file), "%.200s/%02d%02d%02d%02d_%.63s", dir, now.day, now.hour, now.minute, now.second, photos[photo].name);
-    if (sceIoRename(t.orig, t.file) < 0) return -1;
+    if (move_file(t.orig, t.file) < 0) return -1;
     trash[trash_count++] = t;
     while (trash_count > TRASH_KEEP) trash_purge(0);
     trash_forget_textures();
@@ -314,11 +334,11 @@ static int trash_put(int photo)
 
 static void trash_restore(int i)
 {
-    if (sceIoRename(trash[i].file, trash[i].orig) < 0) {
+    if (move_file(trash[i].file, trash[i].orig) < 0) {
         // Its folder is gone: back to the top of PICTURE instead.
         char path[320];
         snprintf(path, sizeof(path), "%s/%s", plib_dir(), trash[i].name);
-        if (sceIoRename(trash[i].file, path) < 0) return;
+        if (move_file(trash[i].file, path) < 0) return;
     }
     memmove(&trash[i], &trash[i + 1], (trash_count - i - 1) * sizeof(Trashed));
     trash_count--;

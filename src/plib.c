@@ -301,6 +301,9 @@ const Texture *plib_thumb(int index)
 
 const char *plib_dir(void) { return picture_dir; }
 
+static char trash[300];
+const char *plib_trash_dir(void) { return trash; }
+
 void plib_init(const char *data, const char *dir)
 {
     snprintf(data_dir, sizeof(data_dir), "%s", data);
@@ -308,6 +311,8 @@ void plib_init(const char *data, const char *dir)
     char path[300];
     snprintf(path, sizeof(path), "%s/pthumbs", data_dir);
     sceIoMkdir(path, 0777);
+    snprintf(trash, sizeof(trash), "%.280s/trash", data_dir);
+    sceIoMkdir(trash, 0777);
     for (int i = 0; i < LOADED; i++) loaded[i].index = -1;
     busy = sceKernelCreateSema("pthumbs", 0, 1, 1, NULL);
     SceUID th = sceKernelCreateThread("boro_pthumbs", worker_thread, 0x22, 0x20000, PSP_THREAD_ATTR_USER, NULL);
