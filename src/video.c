@@ -187,6 +187,20 @@ static int cmp_item(const void *a, const void *b)
     return x == y ? 0 : x < y ? 1 : -1;
 }
 
+// TV & Movies tab and show page
+enum { FILTER_ALL, FILTER_SHOWS, FILTER_MOVIES, FILTER_COUNT };
+static const char *const filter_names[FILTER_COUNT] = { "All", "Shows", "Movies" };
+static int tvm[512], tvm_count, tvm_sel, tvm_filter;
+static float tvm_scroll;
+
+static int show_open = -1, show_sel, season_sel;
+static int seasons[64], season_count;
+static int eps[512], ep_count;
+static float show_scroll;
+
+static void build_tvm(void);
+static void build_episodes(int keep_video);
+
 static void build_home(void)
 {
     int keep[HOME_ROWS];
@@ -212,9 +226,128 @@ static void build_home(void)
     if (hero_new)
         for (int i = 0; i < video_count; i++)
             if (hero < 0 || videos[i].modified > videos[hero].modified) hero = i;
+    build_tvm();
+    if (show_open >= 0) build_episodes(ep_count ? eps[show_sel] : -1);
+}
+
+
+// ---- TV & Movies tab and show page --------------------------------------------
+
+
+static void build_tvm(void)
+{
+    int was = tvm_count ? tvm[tvm_sel] : 0;
+    tvm_count = 0;
+    for (int i = 0; i < row_count[0]; i++) {
+        int it = rows[0][i];
+        if ((tvm_filter == FILTER_SHOWS && it >= 0) || (tvm_filter == FILTER_MOVIES && it < 0)) continue;
+        tvm[tvm_count++] = it;
+    }
+    tvm_sel = 0;
+    for (int i = 0; i < tvm_count; i++) if (tvm[i] == was) tvm_sel = i;
+    tvm_scroll = tvm_sel > 0 ? tvm_sel - 1 : 0;
+}
+
+// The season's episodes into eps; keeps the selection on the same video.
+static void build_episodes(int keep_video)
+{
+    static int all[512];
+    int n = vlib_episodes(show_open, all, 512);
+    ep_count = 0;
+    show_sel = 0;
+    for (int i = 0; i < n; i++) {
+        if (season_count > 1 && videos[all[i]].season != seasons[season_sel]) continue;
+        if (all[i] == keep_video) show_sel = ep_count;
+        eps[ep_count++] = all[i];
+    }
+    show_scroll = show_sel > 0 ? show_sel - 1 : 0;
+}
+
+static void open_show(int show)
+{
+    static int all[512];
+    show_open = show;
+    int n = vlib_episodes(show, all, 512), next = vlib_next_up(show);
+    season_count = 0;
+    for (int i = 0; i < n; i++) {
+        int sn = videos[all[i]].season, dup = 0;
+        for (int k = 0; k < season_count; k++) if (seasons[k] == sn) dup = 1;
+        if (!dup && season_count < 64) seasons[season_count++] = sn;
+    }
+    season_sel = 0;
+    for (int k = 0; k < season_count; k++) if (next >= 0 && seasons[k] == videos[next].season) season_sel = k;
+    build_episodes(next);
+}
+
+// An episode's name without the show and S01E03 part of the file name.
+static void episode_name(const Video *v, char *out, int size)
+{
+    const char *t = v->title, *rest = NULL;
+    for (const char *p = t; *p && !rest; p++) {
+        if ((*p == 'S' || *p == 's') && p[1] >= '0' && p[1] <= '9') {
+            const char *q = p + 1;
+            while (*q >= '0' && *q <= '9') q++;
+            if ((*q == 'E' || *q == 'e') && q[1] >= '0' && q[1] <= '9') {
+                q++;
+                while (*q >= '0' && *q <= '9') q++;
+                rest = q;
+            }
+        }
+    }
+    if (rest) {
+        while (*rest == ' ' || *rest == '.' || *rest == '-' || *rest == '_') rest++;
+        snprintf(out, size, "%s", rest);
+        for (char *c = out; *c; c++) if (*c == '.') *c = ' ';
+        if (*out) return;
+    }
+    snprintf(out, size, "%s", t);
+}
+
+static void season_label(int sn, char *out, int size)
+{
+    if (sn) snprintf(out, size, "Season %d", sn);
+    else snprintf(out, size, "%s", season_count > 1 ? "Other" : "Season 1");
 }
 
 static void start(int index, u32 from);
+
+static int show_update(const Input *in)
+{
+    u32 p = in->pressed, nav = in->nav;
+    if (p & PSP_CTRL_CIRCLE) { show_open = -1; return 0; }
+    int was = season_sel;
+    if (p & PSP_CTRL_LTRIGGER && season_sel > 0) season_sel--;
+    if (p & PSP_CTRL_RTRIGGER && season_sel < season_count - 1) season_sel++;
+    if (season_sel != was) { build_episodes(-1); return 0; }
+    if (!ep_count) return 0;
+    if (nav & PSP_CTRL_UP && show_sel > 0) show_sel--;
+    if (nav & PSP_CTRL_DOWN && show_sel < ep_count - 1) show_sel++;
+    const Video *v = &videos[eps[show_sel]];
+    if (p & PSP_CTRL_CROSS) start(eps[show_sel], resume_of(v));
+    else if (p & PSP_CTRL_TRIANGLE) start(eps[show_sel], 0);
+    return 0;
+}
+
+static int tvm_update(const Input *in)
+{
+    u32 p = in->pressed, nav = in->nav;
+    if (p & PSP_CTRL_CIRCLE) {
+        vlib_thumbs(0);
+        return 1;
+    }
+    if (p & PSP_CTRL_SQUARE) { tvm_filter = (tvm_filter + 1) % FILTER_COUNT; build_tvm(); }
+    if (!tvm_count) return 0;
+    if (nav & PSP_CTRL_LEFT && tvm_sel > 0) tvm_sel--;
+    if (nav & PSP_CTRL_RIGHT && tvm_sel < tvm_count - 1) tvm_sel++;
+    int it = tvm[tvm_sel];
+    if (p & PSP_CTRL_CROSS) {
+        if (it < 0) open_show(-it - 1);
+        else start(it, resume_of(&videos[it]));
+    } else if (p & PSP_CTRL_TRIANGLE && it >= 0) {
+        start(it, 0);
+    }
+    return 0;
+}
 
 static int home_update(const Input *in)
 {
@@ -231,9 +364,9 @@ static int home_update(const Input *in)
     if (nav & PSP_CTRL_LEFT && row_sel[r] > 0) row_sel[r]--;
     if (nav & PSP_CTRL_RIGHT && row_sel[r] < n - 1) row_sel[r]++;
     if (p & PSP_CTRL_CROSS) {
-        // Shows play their next episode until they get a page of their own.
-        int v = item_video(rows[r][row_sel[r]]);
-        if (v >= 0) start(v, resume_of(&videos[v]));
+        int it = rows[r][row_sel[r]];
+        if (it < 0) open_show(-it - 1);
+        else start(it, resume_of(&videos[it]));
     }
     return 0;
 }
@@ -242,6 +375,7 @@ static int browser_update(const Input *in, float dt)
 {
     u32 p = in->pressed, nav = in->nav;
     if (tab == TAB_PHOTOS && photos_viewing()) return photos_update(in, dt);
+    if (show_open >= 0) return show_update(in);
     int was = tab;
     if (p & PSP_CTRL_LTRIGGER) tab = (tab + TAB_COUNT - 1) % TAB_COUNT;
     if (p & PSP_CTRL_RTRIGGER) tab = (tab + 1) % TAB_COUNT;
@@ -258,6 +392,7 @@ static int browser_update(const Input *in, float dt)
         return 1;
     }
     if (tab == TAB_HOME) return home_update(in);
+    if (tab == TAB_TVM) return tvm_update(in);
     if (p & PSP_CTRL_CIRCLE) {
         vlib_thumbs(0);
         return 1;
@@ -458,10 +593,12 @@ static void draw_home_hero(float oy)
         u32 m = (v->duration_ms - resume_of(v) + 59999) / 60000;
         snprintf(left, sizeof(left), "%u min left", (unsigned)m);
     }
+    char ep[96];
+    episode_name(v, ep, sizeof(ep));
     if (v->show >= 0 && v->episode)
-        snprintf(buf, sizeof(buf), "S%d E%d \xC2\xB7 %s%s%s", v->season ? v->season : 1, v->episode, v->title, *left ? " \xC2\xB7 " : "", left);
+        snprintf(buf, sizeof(buf), "S%d E%d \xC2\xB7 %s%s%s", v->season ? v->season : 1, v->episode, ep, *left ? " \xC2\xB7 " : "", left);
     else if (v->show >= 0)
-        snprintf(buf, sizeof(buf), "%s%s%s", v->title, *left ? " \xC2\xB7 " : "", left);
+        snprintf(buf, sizeof(buf), "%s%s%s", ep, *left ? " \xC2\xB7 " : "", left);
     else if (*left)
         snprintf(buf, sizeof(buf), "%s", left);
     else if (v->duration_ms) {
@@ -530,15 +667,207 @@ static void home_draw(float dt)
     if (row_count[0]) { draw_home_row(0, y, dt); y += POSTER_TH + 30; }
     draw_home_row(1, y, dt);
     int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
-    const char *l[] = { "Play", hero >= 0 && resume_of(&videos[hero]) ? "Resume" : "Play newest", "Back" };
+    const char *l[] = { "Open", hero >= 0 && resume_of(&videos[hero]) ? "Resume" : "Play newest", "Back" };
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
     draw_hints(g, l, 3, SCREEN_W - 14, SCREEN_H - 8, MUTED);
+}
+
+static void draw_pill(float x, float y, const char *label, int on)
+{
+    float w = font_width(f_small, label, 0) + 18;
+    if (on) gfx_nine(t_fill12, 12, x, y, w, 17, TEXT);
+    else ui_ring(x, y, w, 17, 8, CHIP);
+    font_draw(f_small, x + 9, y + 12, label, on ? BG : MUTED, 0);
+}
+
+static float pill_width(const char *label) { return font_width(f_small, label, 0) + 18 + 6; }
+
+static void minutes(char *out, int size, u32 ms)
+{
+    u32 m = (ms + 59999) / 60000;
+    if (m >= 60) snprintf(out, size, "%uh %um", (unsigned)(m / 60), (unsigned)(m % 60));
+    else snprintf(out, size, "%u min", (unsigned)m);
+}
+
+// "14 min left", or the length, or "".
+static void time_note(const Video *v, char *out, int size)
+{
+    *out = 0;
+    if (resume_of(v) && v->duration_ms > resume_of(v)) {
+        minutes(out, size, v->duration_ms - resume_of(v));
+        strncat(out, " left", size - strlen(out) - 1);
+    } else if (v->duration_ms) {
+        minutes(out, size, v->duration_ms);
+    }
+}
+
+static int season_total(int show)
+{
+    int seen[64], n = 0;
+    for (int i = 0; i < video_count; i++) {
+        if (videos[i].show != show) continue;
+        int dup = 0;
+        for (int k = 0; k < n; k++) if (seen[k] == videos[i].season) dup = 1;
+        if (!dup && n < 64) seen[n++] = videos[i].season;
+    }
+    return n ? n : 1;
+}
+
+static void tvm_draw(float dt)
+{
+    float x = 14;
+    for (int i = 0; i < FILTER_COUNT; i++) { draw_pill(x, 32, filter_names[i], i == tvm_filter); x += pill_width(filter_names[i]); }
+    int ns = 0, nm = 0;
+    for (int i = 0; i < row_count[0]; i++) { if (rows[0][i] < 0) ns++; else nm++; }
+    char buf[160], note[32];
+    snprintf(buf, sizeof(buf), "%d show%s \xC2\xB7 %d movie%s", ns, ns == 1 ? "" : "s", nm, nm == 1 ? "" : "s");
+    font_draw_right(f_small, SCREEN_W - 14, 44, buf, DIM);
+    if (!tvm_count) {
+        font_draw_center(f_title, SCREEN_W / 2, 130, tvm_filter == FILTER_MOVIES ? "No movies yet" : "No shows yet", TEXT);
+        font_draw_center(f_small, SCREEN_W / 2, 150, tvm_filter == FILTER_MOVIES ? "Movies go in VIDEO/Movies." : "Shows go in VIDEO/Shows/<Show>/.", MUTED);
+    } else {
+        float tw = 58, th = 84, gap = 7, ty = 58;
+        tvm_scroll = ui_approach(tvm_scroll, tvm_sel > 0 ? tvm_sel - 1 : 0, dt, 14);
+        gfx_clip(0, 50, SCREEN_W, 120);
+        for (int i = 0; i < tvm_count; i++) {
+            float px = 14 + (i - tvm_scroll) * (tw + gap);
+            if (px > SCREEN_W || px + tw < 0) continue;
+            int it = tvm[i], on = i == tvm_sel, v = item_video(it);
+            if (on) ui_rrect(px - 3, ty - 3, tw + 6, th + 6, 8, ACCENT);
+            if (on) ui_rrect(px - 1, ty - 1, tw + 2, th + 2, 7, BG);
+            draw_poster(it, px, ty, tw, th);
+            if (v >= 0) draw_progress(px, ty + th - 3, tw, &videos[v]);
+            ui_round_corners(px, ty, tw, th, 5, BG);
+            if (it >= 0) {
+                float bw = font_width(f_chip, "MOVIE", 0) + 6;
+                ui_rrect(px + 3, ty + 3, bw, 11, 3, RGBA(0, 0, 0, 190));
+                font_draw(f_chip, px + 6, ty + 11, "MOVIE", TEXT, 0);
+            }
+            font_draw_fit(f_tiny, px, ty + th + 12, it < 0 ? shows[-it - 1].name : videos[it].title, on ? TEXT : MUTED, tw);
+            if (it < 0) { int n = season_total(-it - 1); snprintf(note, sizeof(note), "%d season%s", n, n == 1 ? "" : "s"); }
+            else time_note(&videos[it], note, sizeof(note));
+            font_draw_fit(f_chip, px, ty + th + 23, note, DIM, tw);
+        }
+        gfx_unclip();
+
+        int it = tvm[tvm_sel];
+        float y = 196;
+        if (it < 0) {
+            const Show *sh = &shows[-it - 1];
+            int n = season_total(-it - 1);
+            font_draw_fit(f_title, 14, y, sh->name, TEXT, SCREEN_W - 28);
+            snprintf(buf, sizeof(buf), "Show \xC2\xB7 %d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
+            font_draw_fit(f_small, 14, y + 17, buf, MUTED, SCREEN_W - 28);
+            int nx = vlib_next_up(-it - 1);
+            if (nx >= 0) {
+                const Video *v = &videos[nx];
+                char ep[96];
+                episode_name(v, ep, sizeof(ep));
+                time_note(v, note, sizeof(note));
+                if (v->episode) snprintf(buf, sizeof(buf), "%s: E%d \xC2\xB7 %s", resume_of(v) ? "Continue" : "Next up", v->episode, ep);
+                else snprintf(buf, sizeof(buf), "%s: %s", resume_of(v) ? "Continue" : "Next up", ep);
+                font_draw_fit(f_small, 14, y + 31, buf, MUTED, SCREEN_W - 28);
+            }
+        } else {
+            const Video *v = &videos[it];
+            font_draw_fit(f_title, 14, y, v->title, TEXT, SCREEN_W - 28);
+            time_note(v, note, sizeof(note));
+            snprintf(buf, sizeof(buf), "Movie%s%s \xC2\xB7 %s", *note ? " \xC2\xB7 " : "", note, resume_of(v) ? "Stopped partway" : v->watched ? "Watched" : "Not watched yet");
+            font_draw_fit(f_small, 14, y + 17, buf, MUTED, SCREEN_W - 28);
+        }
+    }
+    int it = tvm_count ? tvm[tvm_sel] : 0;
+    int movie = tvm_count && it >= 0, resume = movie && resume_of(&videos[it]);
+    int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, ICON_CIRCLE };
+    const char *l[] = { !tvm_count ? "Open" : movie ? (resume ? "Resume" : "Play") : "Open", "Start over", "Filter", "Back" };
+    if (movie) draw_hints(g, l, 4, SCREEN_W - 14, SCREEN_H - 8, MUTED);
+    else {
+        int g2[] = { ICON_CROSS, ICON_SQUARE, ICON_CIRCLE };
+        const char *l2[] = { "Open", "Filter", "Back" };
+        draw_hints(g2, l2, 3, SCREEN_W - 14, SCREEN_H - 8, MUTED);
+    }
+}
+
+static void show_draw(float dt)
+{
+    gfx_begin(BG);
+    const Show *sh = &shows[show_open];
+    int next = vlib_next_up(show_open);
+    // Backdrop: the next episode's picture fading into the page.
+    if (next >= 0 && vlib_thumb(next)) {
+        draw_thumb_crop(next, 0, 0, SCREEN_W, 124);
+        gfx_rect(0, 0, SCREEN_W, 124, RGBA(14, 15, 19, 150));
+        gfx_gradient(0, 64, SCREEN_W, 60, BG & 0x00FFFFFF, BG & 0x00FFFFFF, BG, BG);
+    }
+    font_draw(f_small, 14, 20, "TV & Movies", MUTED, 0);
+    ui_battery(f_small, SCREEN_W - 14, 16, MUTED);
+    draw_poster(-(show_open + 1), 14, 30, 66, 96);
+    ui_round_corners(14, 30, 66, 96, 5, BG);
+    font_draw_fit(f_hero, 92, 60, sh->name, TEXT, SCREEN_W - 106);
+    char buf[160], note[32];
+    int n = season_total(show_open);
+    snprintf(buf, sizeof(buf), "%d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
+    font_draw_fit(f_small, 92, 76, buf, MUTED, SCREEN_W - 106);
+    if (season_count > 1) {
+        float x = 92;
+        for (int k = 0; k < season_count && x < SCREEN_W - 40; k++) {
+            char lab[24];
+            season_label(seasons[k], lab, sizeof(lab));
+            draw_pill(x, 88, lab, k == season_sel);
+            x += pill_width(lab);
+        }
+    }
+
+    float top = 136, rh = 29;
+    int vis = 4;
+    float target = show_sel - 1;
+    if (target > ep_count - vis) target = ep_count - vis;
+    if (target < 0) target = 0;
+    show_scroll = ui_approach(show_scroll, target, dt, 14);
+    gfx_clip(0, top - 4, SCREEN_W, rh * vis + 2);
+    for (int i = 0; i < ep_count; i++) {
+        float y = top + (i - show_scroll) * rh;
+        if (y < top - rh || y > top + rh * vis) continue;
+        const Video *v = &videos[eps[i]];
+        if (i == show_sel) { ui_rrect(10, y - 3, SCREEN_W - 20, 27, 5, HEX(0x1E2027, 255)); ui_ring(10, y - 3, SCREEN_W - 20, 27, 5, ACCENT); }
+        draw_thumb_crop(eps[i], 20, y, 40, 22);
+        draw_progress(20, y + 19, 40, v);
+        ui_round_corners(20, y, 40, 22, 3, i == show_sel ? HEX(0x1E2027, 255) : BG);
+        char ep[96];
+        episode_name(v, ep, sizeof(ep));
+        if (v->episode) snprintf(buf, sizeof(buf), "%d. %s", v->episode, ep);
+        else snprintf(buf, sizeof(buf), "%s", ep);
+        font_draw_fit(f_small_b, 70, y + 9, buf, TEXT, SCREEN_W - 150);
+        time_note(v, note, sizeof(note));
+        font_draw(f_tiny, 70, y + 21, note, MUTED, 0);
+        if (v->watched && !v->resume_ms) font_draw_right(f_tiny, SCREEN_W - 22, y + 15, "Watched", ACCENT);
+    }
+    gfx_unclip();
+    if (!ep_count) font_draw_center(f_small, SCREEN_W / 2, 180, "No episodes in this season", MUTED);
+
+    int resume = ep_count && resume_of(&videos[eps[show_sel]]);
+    if (season_count > 1) {
+        int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
+        const char *l[] = { resume ? "Resume" : "Play", "Start over", "Back" };
+        font_draw(f_tiny, 14, SCREEN_H - 8, "L/R Season", MUTED, 0);
+        draw_hints(g, l, 3, SCREEN_W - 14, SCREEN_H - 8, MUTED);
+    } else {
+        int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
+        const char *l[] = { resume ? "Resume" : "Play", "Start over", "Back" };
+        draw_hints(g, l, 3, SCREEN_W - 14, SCREEN_H - 8, MUTED);
+    }
+    ui_volume(f_small_b, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
+    gfx_end();
 }
 
 static void browser_draw(float dt)
 {
     if (tab == TAB_PHOTOS && photos_viewing()) {
         photos_draw(dt);
+        return;
+    }
+    if (show_open >= 0) {
+        show_draw(dt);
         return;
     }
     gfx_begin(BG);
@@ -552,6 +881,8 @@ static void browser_draw(float dt)
         draw_hints(g, l, 1, SCREEN_W - 14, SCREEN_H - 8, MUTED);
     } else if (tab == TAB_HOME) {
         home_draw(dt);
+    } else if (tab == TAB_TVM) {
+        tvm_draw(dt);
     } else if (!list_count) {
         font_draw_center(f_title, SCREEN_W / 2, 120, "Nothing in this tab", TEXT);
         const char *c = tab == TAB_MUSIC ? "Music videos go in VIDEO/Music." : "Movies go in VIDEO/Movies, shows in VIDEO/Shows/<Show>.";
