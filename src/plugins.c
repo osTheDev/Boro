@@ -115,8 +115,14 @@ static int list_enabled(const char *list, const char *file)
     return on;
 }
 
+static int rewrite_list(const char *path, int plugin, int on);
+
 static void load(void)
 {
+    // Fold old vsh + game pairs into one line per plugin.
+    for (int l = 0; l < LISTS; l++)
+        for (int i = 0; i < PLUGINS; i++) rewrite_list(lists[l], i, -1);
+
     int len;
     char *list[LISTS], *ini = read_all(INI, &len);
     for (int l = 0; l < LISTS; l++) list[l] = read_all(lists[l], &len);
@@ -171,41 +177,49 @@ static void save_option(const Row *r, int on)
     }
 }
 
-// Rewrites the on/off field of the plugin's lines in one list. Returns
-// whether the list had any.
+// Rewrites the plugin's lines in one list as a single "always" line (ARK's
+// manager lists every line, so the old vsh + game pair showed twice). on < 0
+// keeps the list's current state. Returns whether the list had the plugin.
 static int rewrite_list(const char *path, int plugin, int on)
 {
     int len, n = 0, found = 0;
     char *list = read_all(path, &len);
     if (!list) return 0;
-    char *out = malloc(len + 16 * 4 + 1);
+    if (on < 0) on = list_enabled(list, files[plugin]);
+    char *out = malloc(len + 32);
     if (!out) { free(list); return 0; }
     for (char *line = list; *line;) {
         char *eol = strchr(line, '\n');
         int ll = eol ? eol - line + 1 : (int)strlen(line);
         const char *hit = find_ci(line, files[plugin]);
         if (hit && hit < line + ll) {
-            // Keep everything up to the last comma, and the line's own ending.
-            char *last = line + ll;
-            while (last > line && (last[-1] == '\n' || last[-1] == '\r')) last--;
-            char *comma = last;
-            while (comma > hit && *comma != ',') comma--;
-            n += sprintf(out + n, "%.*s, %s%.*s", (int)(comma - line), line, on ? "on" : "off", (int)(line + ll - last), last);
-            found = 1;
+            if (!found) {
+                // Keep the line's own path text and line ending.
+                char *last = line + ll;
+                while (last > line && (last[-1] == '\n' || last[-1] == '\r')) last--;
+                char *first = strchr(line, ',');
+                char *comma = last;
+                while (comma > hit && *comma != ',') comma--;
+                if (!first || first >= comma) first = line - 1;
+                while (*++first == ' ');
+                n += sprintf(out + n, "always, %.*s, %s%.*s", (int)(comma - first), first,
+                             on ? "on" : "off", (int)(line + ll - last), last);
+                found = 1;
+            }
         } else {
             memcpy(out + n, line, ll);
             n += ll;
         }
         line += ll;
     }
-    if (found) write_all(path, out, n);
+    if (found && (n != len || memcmp(out, list, n))) write_all(path, out, n);
     free(out);
     free(list);
     return found;
 }
 
-// Updates the plugin's lines wherever they are; adds them to SEPLUGINS only
-// when no list has them yet.
+// Updates the plugin's line wherever it is; adds it to SEPLUGINS only when
+// no list has it yet.
 static void save_enabled(int plugin, int on)
 {
     int found = 0;
@@ -213,11 +227,11 @@ static void save_enabled(int plugin, int on)
     if (found || !on) return;
     int len;
     char *list = read_all(lists[0], &len);
-    char *out = malloc(len + 160);
+    char *out = malloc(len + 96);
     if (!out) { free(list); return; }
     int n = list ? sprintf(out, "%s", list) : 0;
     if (n && out[n - 1] != '\n') out[n++] = '\n';
-    n += sprintf(out + n, "vsh, " DIR "%s, on\ngame, " DIR "%s, on\n", files[plugin], files[plugin]);
+    n += sprintf(out + n, "always, " DIR "%s, on\n", files[plugin]);
     write_all(lists[0], out, n);
     free(out);
     free(list);
