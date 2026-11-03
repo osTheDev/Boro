@@ -248,10 +248,12 @@ static int albums_update(const Input *in)
 
 // Renames, or where the memory stick won't rename across folders, copies
 // and then removes the original once the copy is whole.
+// Copies, then removes the original once the copy is whole and in place.
+// No rename: across folders the memory stick reports success for a rename
+// that doesn't leave the file where asked.
 // Returns 0, or the error code of the step that failed (for the note).
 static int move_file(const char *from, const char *to)
 {
-    if (sceIoRename(from, to) >= 0) return 0;
     SceUID in = sceIoOpen(from, PSP_O_RDONLY, 0);
     if (in < 0) return in;
     SceUID out = sceIoOpen(to, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
@@ -266,6 +268,8 @@ static int move_file(const char *from, const char *to)
     sceIoClose(in);
     sceIoClose(out);
     if (err) { sceIoRemove(to); return err; }
+    SceIoStat a, b;
+    if (sceIoGetstat(from, &a) < 0 || sceIoGetstat(to, &b) < 0 || a.st_size != b.st_size) { sceIoRemove(to); return -2; }
     int r = sceIoRemove(from);
     return r < 0 ? r : 0;
 }
