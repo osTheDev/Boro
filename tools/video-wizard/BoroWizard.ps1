@@ -103,14 +103,26 @@ function New-Item-For([string]$path) {
     $base = [IO.Path]::GetFileNameWithoutExtension($path)
     $it = @{ Src = $path; Shelf = 0; Title = ''; Show = ''; Season = 1; Episode = 1
              Poster = 'frame'; FramePage = 0; FrameSel = 1; Frames = @{}; Times = @{}; Own = $null
-             Duration = -1.0; Clip = $null; NoFrames = $false; Status = '' }
+             Duration = -1.0; Clip = $null; NoFrames = $false; Status = ''; EpGuessed = $false }
     if ($base -match '^(.*?)[\s._\-]*[Ss](\d{1,2})[\s._]?[Ee](\d{1,3})(.*)$' -or
         $base -match '^(.*?)[\s._\-]+(\d{1,2})x(\d{2,3})(.*)$') {
         $it.Shelf = 1
         $it.Show = Clean-Name ($Matches[1] -replace '[\s._\-]*\(?(19|20)\d{2}\)?$', '')
         $it.Season = [Math]::Max(1, [Math]::Min(99, [int]$Matches[2]))
         $it.Episode = [Math]::Max(1, [Math]::Min(999, [int]$Matches[3]))
-        $it.Title = Clean-Name $Matches[4]
+        $it.Title = Clean-Name (" " + $Matches[4])
+        $it.EpGuessed = $true
+        $known = Existing-Shows | Where-Object { $_ -ieq $it.Show } | Select-Object -First 1
+        if ($known) { $it.Show = $known }
+        return $it
+    }
+    # "Show - Episode 3 - Title", "Show Ep 03", "Show E03"
+    if ($base -match '^(.+?)[\s._\-]+(?:episode|ep|e)[\s._]*(\d{1,3})\b[\s._\-]*(.*)$') {
+        $it.Shelf = 1
+        $it.Show = Clean-Name $Matches[1]
+        $it.Episode = [Math]::Max(1, [int]$Matches[2])
+        $it.Title = Clean-Name (" " + $Matches[3])
+        $it.EpGuessed = $true
         $known = Existing-Shows | Where-Object { $_ -ieq $it.Show } | Select-Object -First 1
         if ($known) { $it.Show = $known }
         return $it
@@ -471,7 +483,7 @@ $P2 = New-Page
 $P2.Controls.Add((New-Label 'What are they?' 0 4 366 $Head))
 $Table = New-Object Windows.Forms.ListView
 $Table.Location = New-Object Drawing.Point(0, 28); $Table.Size = New-Object Drawing.Size(360, 92)
-$Table.View = 'Details'; $Table.FullRowSelect = $true; $Table.HideSelection = $false; $Table.MultiSelect = $false
+$Table.View = 'Details'; $Table.FullRowSelect = $true; $Table.HideSelection = $false; $Table.MultiSelect = $true
 $Table.HeaderStyle = 'Nonclickable'
 [void]$Table.Columns.Add('File', 130); [void]$Table.Columns.Add('Shelf', 46); [void]$Table.Columns.Add('Name in Boro', 162)
 $P2.Controls.Add($Table)
@@ -500,10 +512,11 @@ $TitleBox = New-Object Windows.Forms.TextBox
 $TitleBox.Location = New-Object Drawing.Point(0, 224); $TitleBox.Size = New-Object Drawing.Size(360, 21)
 $P2.Controls.Add($TitleBox)
 $ShowsAs = New-Label '' 0 252 366; $P2.Controls.Add($ShowsAs)
-$Hint = New-Label 'I guessed from the file names. Click a row to fix it.' 0 272; $Hint.ForeColor = $Dim; $P2.Controls.Add($Hint)
+$Hint = New-Label 'I guessed from the file names. Click a row to fix it (Ctrl/Shift for several).' 0 272; $Hint.ForeColor = $Dim; $P2.Controls.Add($Hint)
 $RedNote = New-Label 'Red = still needs something.' 0 288; $RedNote.ForeColor = $Red; $P2.Controls.Add($RedNote)
 
 function Selected-Item { if ($Table.SelectedItems.Count) { return $Table.SelectedItems[0].Tag }; return $null }
+function Selected-Rows { return @($Table.SelectedItems | ForEach-Object { $_ }) }
 
 function Update-Row($row) {
     $it = $row.Tag
@@ -535,6 +548,10 @@ function Load-Editor {
     if ($it) {
         $Radios[$it.Shelf].Checked = $true
         $ShowBox.Text = $it.Show; $SeasonBox.Value = $it.Season; $EpBox.Value = $it.Episode; $TitleBox.Text = $it.Title
+        # Several rows: shelf, show and season go to all of them; titles one at a time.
+        $one = $Table.SelectedItems.Count -eq 1
+        $EpBox.Enabled = $one; $TitleBox.Enabled = $one
+        if (-not $one) { $TitleBox.Text = '' }
     }
     $script:Loading = $false
     Update-Editor
@@ -546,6 +563,10 @@ function Update-Editor {
     foreach ($c in @($ShowLabel, $ShowBox, $SeasonLabel, $SeasonBox, $EpLabel, $EpBox)) { $c.Visible = $tv }
     if ($tv) { $TitleLabel.Text = 'Episode title (optional):' } elseif ($it -and $it.Shelf -eq 2) { $TitleLabel.Text = 'Artist - Song:' } else { $TitleLabel.Text = 'Title:' }
     if (-not $it) { $ShowsAs.Text = ''; return }
+    if ($Table.SelectedItems.Count -gt 1) {
+        $ShowsAs.Text = "Editing $($Table.SelectedItems.Count) videos: shelf, show and season apply to all."
+        return
+    }
     if ($tv) {
         $ep = "$($it.Episode)."; if ($it.Title.Trim()) { $ep += ' ' + $it.Title.Trim() }
         $show = $it.Show.Trim(); if (-not $show) { $show = '(show?)' }
@@ -555,22 +576,37 @@ function Update-Editor {
     }
 }
 
-# Copies the editor into the selected item.
-function Save-Editor {
+# Copies one field of the editor into the selected item(s).
+function Save-Editor([string]$field) {
     if ($script:Loading) { return }
-    $it = Selected-Item
-    if (-not $it) { return }
-    for ($i = 0; $i -lt 4; $i++) { if ($Radios[$i].Checked) { $it.Shelf = $i } }
-    $it.Show = $ShowBox.Text; $it.Season = [int]$SeasonBox.Value; $it.Episode = [int]$EpBox.Value; $it.Title = $TitleBox.Text
-    Update-Row $Table.SelectedItems[0]
+    $rows = Selected-Rows
+    if (-not $rows.Count) { return }
+    $n = 0
+    foreach ($row in $rows) {
+        $it = $row.Tag
+        switch ($field) {
+            'shelf' {
+                $was = $it.Shelf
+                for ($i = 0; $i -lt 4; $i++) { if ($Radios[$i].Checked) { $it.Shelf = $i } }
+                # Made into episodes together: number them in list order.
+                if ($it.Shelf -eq 1 -and $was -ne 1 -and $rows.Count -gt 1 -and -not $it.EpGuessed) { $n++; $it.Episode = $n }
+                if ($it.Shelf -eq 1 -and $was -ne 1 -and $rows.Count -gt 1 -and $ShowBox.Text.Trim()) { $it.Show = $ShowBox.Text }
+            }
+            'show'    { $it.Show = $ShowBox.Text }
+            'season'  { $it.Season = [int]$SeasonBox.Value }
+            'episode' { if ($rows.Count -eq 1) { $it.Episode = [int]$EpBox.Value } }
+            'title'   { if ($rows.Count -eq 1) { $it.Title = $TitleBox.Text } }
+        }
+        Update-Row $row
+    }
     Update-Editor
 }
 
 $Table.Add_SelectedIndexChanged({ Load-Editor })
-foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor } }) }
-$ShowBox.Add_TextChanged({ Save-Editor }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor })
-$SeasonBox.Add_ValueChanged({ Save-Editor }); $EpBox.Add_ValueChanged({ Save-Editor })
-$TitleBox.Add_TextChanged({ Save-Editor })
+foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor 'shelf' } }) }
+$ShowBox.Add_TextChanged({ Save-Editor 'show' }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor 'show' })
+$SeasonBox.Add_ValueChanged({ Save-Editor 'season' }); $EpBox.Add_ValueChanged({ Save-Editor 'episode' })
+$TitleBox.Add_TextChanged({ Save-Editor 'title' })
 
 # ---- Step 3: posters ----
 $P3 = New-Page
@@ -784,6 +820,7 @@ function Start-Next {
         '-i', "`"$($it.Src)`"", '-o', "`"$out`"", '--json',
         '-f', 'av_mp4', '--optimize',
         '-e', 'x264', '--encoder-preset', 'medium', '--encoder-profile', 'main', '--encoder-level', '3.0', '-q', '22',
+        '-x', 'ref=3:bframes=2:b-pyramid=none:weightp=0:8x8dct=0',
         '--maxWidth', '480', '--maxHeight', '272', '--non-anamorphic', '--modulus', '16',
         '-r', '30', '--pfr',
         '-a', '1', '-E', 'av_aac', '-B', '128', '--mixdown', 'stereo', '-R', '44.1',
