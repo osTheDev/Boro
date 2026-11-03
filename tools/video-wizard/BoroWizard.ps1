@@ -1,17 +1,17 @@
 # Boro Video Wizard
 #
-# Watches your Downloads folder. Each new video is converted with HandBrakeCLI
+# Watches a folder (Downloads unless you pick another with "Folder..."). Each new video is converted with HandBrakeCLI
 # to an MP4 the PSP plays (H.264 Main, at most 480x272, stereo AAC), then you
-# name it and pick its shelf, and it lands in Downloads\PSP\VIDEO laid out the
-# way Boro reads it:
+# name it and pick its shelf, and it lands in <watched folder>\PSP\VIDEO laid
+# out the way Boro reads it:
 #
 #   VIDEO\Movies\<Title>.mp4
 #   VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Episode title>.mp4  (+ cover.jpg)
 #   VIDEO\Music\<Artist - Song>.mp4
 #   VIDEO\Clips\<Title>.mp4
 #
-# The original moves to Downloads\Originals. Copy Downloads\PSP\VIDEO onto the
-# memory stick (merging folders) to put the videos on the PSP.
+# The original moves to <watched folder>\Originals. Copy the PSP\VIDEO folder
+# onto the memory stick (merging folders) to put the videos on the PSP.
 #
 # Start it with Start-BoroWizard.bat. It keeps running until you press Quit.
 
@@ -21,11 +21,23 @@ Add-Type -AssemblyName System.Drawing
 
 # ---- Settings ---------------------------------------------------------------
 
-$Downloads = Join-Path $env:USERPROFILE 'Downloads'
-$OutRoot   = Join-Path $Downloads 'PSP\VIDEO'
-$Originals = Join-Path $Downloads 'Originals'
+$SettingsFile = Join-Path $PSScriptRoot 'BoroWizard.settings.txt'
 $WorkDir   = Join-Path $env:TEMP 'BoroWizard'
-$LogFile   = Join-Path $Downloads 'PSP\BoroWizard.log'
+
+# The watched folder, and what lives under it.
+function Set-Watch([string]$dir) {
+    $script:Watch     = $dir
+    $script:OutRoot   = Join-Path $dir 'PSP\VIDEO'
+    $script:Originals = Join-Path $dir 'Originals'
+    $script:LogFile   = Join-Path $dir 'PSP\BoroWizard.log'
+    foreach ($d in @($script:OutRoot, $script:Originals)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+}
+
+$Watch = Join-Path $env:USERPROFILE 'Downloads'
+if (Test-Path -LiteralPath $SettingsFile) {
+    $line = Get-Content -LiteralPath $SettingsFile | Where-Object { $_ -like 'Watch=*' } | Select-Object -First 1
+    if ($line -and (Test-Path -LiteralPath $line.Substring(6))) { $Watch = $line.Substring(6) }
+}
 $VideoExts = @('.mp4', '.mkv', '.avi', '.mov', '.m4v', '.wmv', '.flv', '.webm', '.mpg', '.mpeg', '.ts')
 $AutoFileSeconds = 120   # an unanswered naming page files the video as shown
 
@@ -57,7 +69,8 @@ if (-not $HandBrake) {
     exit 1
 }
 
-foreach ($d in @($OutRoot, $Originals, $WorkDir)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+Set-Watch $Watch
 
 function Write-Log([string]$msg) {
     $line = '{0:yyyy-MM-dd HH:mm:ss}  {1}' -f (Get-Date), $msg
@@ -235,7 +248,7 @@ function Finish-Job {
 
 # New videos in Downloads, once they've stopped growing and nothing has them open.
 function Scan-Downloads {
-    foreach ($f in Get-ChildItem -Path $Downloads -File -ErrorAction SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $Watch -File -ErrorAction SilentlyContinue) {
         if ($VideoExts -notcontains $f.Extension.ToLower()) { continue }
         $k = $f.FullName
         $was = $Seen[$k]
@@ -317,8 +330,13 @@ $Work = New-Object Windows.Forms.Panel
 $Work.Location = New-Object Drawing.Point(146, 8); $Work.Size = New-Object Drawing.Size(366, 306)
 $Form.Controls.Add($Work)
 $Work.Controls.Add((New-Label 'Brewing videos for your PSP...' 0 4 366 $Head))
-$Work.Controls.Add((New-Label "I'm watching your Downloads folder. Drop a video" 0 30))
-$Work.Controls.Add((New-Label "in and I'll shrink it down to PSP size." 0 46))
+$WatchLabel = New-Label '' 0 30 366; $Work.Controls.Add($WatchLabel)
+$Work.Controls.Add((New-Label "Drop a video in and I'll shrink it down to PSP size." 0 46))
+function Show-Watch {
+    $name = Split-Path $script:Watch -Leaf
+    $WatchLabel.Text = "I'm watching your $name folder."
+}
+Show-Watch
 $Work.Controls.Add((New-Label 'Now converting:' 0 72 366 $Bold))
 $NowName = New-Label '(nothing yet)' 0 88; $Work.Controls.Add($NowName)
 $Bar = New-Object Windows.Forms.ProgressBar
@@ -377,6 +395,7 @@ $SavesTo = New-Label '' 0 262 366; $SavesTo.Size = New-Object Drawing.Size(366, 
 $Countdown = New-Label '' 0 290 366; $Countdown.ForeColor = [Drawing.Color]::FromArgb(60, 60, 60); $Name.Controls.Add($Countdown)
 
 # Buttons along the bottom.
+$FolderBtn = New-Button 'Folder...' 275 330; $Form.Controls.Add($FolderBtn)
 $PauseBtn = New-Button 'Pause' 356 330; $Form.Controls.Add($PauseBtn)
 $QuitBtn = New-Button 'Quit' 437 330; $Form.Controls.Add($QuitBtn)
 $FinishBtn = New-Button 'Finish' 356 330; $FinishBtn.Visible = $false; $Form.Controls.Add($FinishBtn)
@@ -442,7 +461,7 @@ function Show-Naming($item) {
     $TitleBox.Text = $g.Title
     $Radios[$g.Shelf].Checked = $true
     $script:Deadline = (Get-Date).AddSeconds($AutoFileSeconds)
-    $Work.Visible = $false; $PauseBtn.Visible = $false; $QuitBtn.Visible = $false
+    $Work.Visible = $false; $PauseBtn.Visible = $false; $QuitBtn.Visible = $false; $FolderBtn.Visible = $false
     $Name.Visible = $true; $FinishBtn.Visible = $true; $SkipBtn.Visible = $true
     $Form.Text = 'Boro Video Wizard - New video ready'
     Update-Naming
@@ -453,7 +472,7 @@ function Show-Naming($item) {
 function Hide-Naming {
     $script:Current = $null
     $Name.Visible = $false; $FinishBtn.Visible = $false; $SkipBtn.Visible = $false
-    $Work.Visible = $true; $PauseBtn.Visible = $true; $QuitBtn.Visible = $true
+    $Work.Visible = $true; $PauseBtn.Visible = $true; $QuitBtn.Visible = $true; $FolderBtn.Visible = $true
     $Form.Text = 'Boro Video Wizard'
 }
 
@@ -496,7 +515,7 @@ $PickBtn.Add_Click({
     & $Touch
     $dlg = New-Object Windows.Forms.OpenFileDialog
     $dlg.Filter = 'Pictures|*.jpg;*.jpeg;*.png;*.bmp;*.webp|All files|*.*'
-    $dlg.InitialDirectory = $Downloads
+    $dlg.InitialDirectory = $Watch
     if ($dlg.ShowDialog() -eq 'OK') {
         try {
             $script:Cover = Load-Image $dlg.FileName; $CoverPic.Image = $script:Cover
@@ -512,6 +531,20 @@ $SkipBtn.Add_Click({ File-Current })   # files it as guessed, right away
 $PauseBtn.Add_Click({
     $script:Paused = -not $script:Paused
     if ($script:Paused) { $PauseBtn.Text = 'Resume' } else { $PauseBtn.Text = 'Pause' }
+})
+$FolderBtn.Add_Click({
+    $dlg = New-Object Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Pick the folder to watch. Converted videos go in PSP\VIDEO inside it, originals in Originals.'
+    $dlg.SelectedPath = $script:Watch
+    if ($dlg.ShowDialog() -ne 'OK' -or $dlg.SelectedPath -eq $script:Watch) { return }
+    Set-Watch $dlg.SelectedPath
+    Set-Content -LiteralPath $SettingsFile -Value ("Watch=" + $dlg.SelectedPath)
+    # Forget what was waiting in the old folder; whatever is converting finishes.
+    $Queue.Clear()
+    foreach ($k in @($Seen.Keys)) { if ($Seen[$k] -isnot [string] -or $Seen[$k] -eq 'busy') { $Seen.Remove($k) } }
+    if ($script:Job) { $Seen[$script:Job.Src] = 'busy' }
+    Show-Watch
+    Write-Log "Now watching $($dlg.SelectedPath)"
 })
 $QuitBtn.Add_Click({ $Form.Close() })
 $Form.Add_FormClosing({
@@ -563,7 +596,7 @@ $Timer.Add_Tick({
     }
 })
 
-Write-Log "Started; watching $Downloads with $HandBrake"
+Write-Log "Started; watching $Watch with $HandBrake"
 $Timer.Start()
 [void]$Form.ShowDialog()
 $Timer.Stop()

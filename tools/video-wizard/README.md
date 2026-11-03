@@ -12,7 +12,9 @@ sorts them.
 
 ## Using it
 
-- Leave it running. Any video that lands in **Downloads** (mp4, mkv, avi, mov,
+- Leave it running. Any video that lands in the watched folder (**Downloads**
+  unless you pick another with **Folder...**; your choice is remembered in
+  `BoroWizard.settings.txt`) (mp4, mkv, avi, mov,
   m4v, wmv, flv, webm, mpg, ts) is picked up once it has finished downloading.
 - It converts one at a time to H.264 Main, at most 480x272, with stereo AAC.
 - When one is done, the wizard asks what it is:
@@ -25,8 +27,8 @@ sorts them.
   
   It fills these in from the file name; if you don't answer in 2 minutes it
   files the video as shown.
-- Converted videos collect in **Downloads\PSP\VIDEO**. Copy that VIDEO folder
+- Converted videos collect in **<watched folder>\PSP\VIDEO**. Copy that VIDEO folder
   onto the memory stick and let it merge.
-- Originals move to **Downloads\Originals**. A log is kept in
-  `Downloads\PSP\BoroWizard.log`.
+- Originals move to **<watched folder>\Originals**. A log is kept in
+  `<watched folder>\PSP\BoroWizard.log`.
 - **Pause** stops it starting the next video; **Quit** closes it.
