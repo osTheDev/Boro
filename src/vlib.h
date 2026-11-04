@@ -24,6 +24,7 @@ typedef struct {
     int fit;           // FIT_* picked while watching, -1 for the Settings default
     int show;          // index into shows, or -1
     int season, episode; // 0 when unknown
+    int year;          // from "(1999)" at the end of the name, or 0
 } Video;
 
 typedef struct {
@@ -31,6 +32,7 @@ typedef struct {
     char dir[256];
     int count;         // episodes
     int watched;       // episodes watched to the end
+    int year;          // from "(2000)" at the end of the folder name, or 0
 } Show;
 
 extern Video *videos;

@@ -27,8 +27,9 @@ them a poster, and it converts and files them the way Boro sorts them.
    it from the episode length), or type start times if it has no chapters.
    Each part becomes its own episode. Files named only "Episode 3" take the
    folder's name as the show.
-   - **Movie** -> `VIDEO\Movies\<Title>.mp4`
-   - **TV episode** -> `VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Title>.mp4`
+   - **Movie** -> `VIDEO\Movies\<Title> (1999).mp4` (Boro shows the year)
+   - **TV episode** -> `VIDEO\Movies\<Show> (2000)\Season N\<Show> S01E03 <Title>.mp4`
+     (shows live among the movies; the year comes from TVmaze)
    - **Music video** -> `VIDEO\Music\<Artist - Song>.mp4`
    - **Clip** -> `VIDEO\Clips\<Title>.mp4` (shows up in Boro's Photos)
 3. **Poster.** For each video pick a frame from it (the arrows step further

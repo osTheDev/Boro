@@ -9,9 +9,9 @@
 #   4. HandBrakeCLI converts the batch to MP4s the PSP plays (H.264 Main, at
 #      most 480x272, stereo AAC) and files them in <folder>\PSP\VIDEO:
 #
-#        VIDEO\Movies\<Title>.mp4            + <Title>.jpg
-#        VIDEO\Shows\<Show>\cover.jpg
-#        VIDEO\Shows\<Show>\Season N\<Show> S01E03 <Episode title>.mp4 + .jpg
+#        VIDEO\Movies\<Title> (1999).mp4     + <Title> (1999).jpg
+#        VIDEO\Movies\<Show> (2000)\cover.jpg
+#        VIDEO\Movies\<Show> (2000)\Season N\<Show> S01E03 <Episode title>.mp4 + .jpg
 #        VIDEO\Music\<Artist - Song>.mp4     + .jpg
 #        VIDEO\Clips\<Title>.mp4             + .jpg
 #
@@ -32,7 +32,7 @@ $FramePages = 4          # 5 frames a page, spread through the video
 
 $Shelves = @(
     @{ Name = 'Movie';       Short = 'Movie'; Folder = 'Movies' },
-    @{ Name = 'TV episode';  Short = 'TV';    Folder = 'Shows' },
+    @{ Name = 'TV episode';  Short = 'TV';    Folder = 'Movies' },   # shows live among the movies
     @{ Name = 'Music video'; Short = 'Music'; Folder = 'Music' },
     @{ Name = 'Clip';        Short = 'Clip';  Folder = 'Clips' }
 )
@@ -104,7 +104,7 @@ function New-Item-For([string]$path) {
     $base = [IO.Path]::GetFileNameWithoutExtension($path)
     $it = @{ Src = $path; Shelf = 0; Title = ''; Show = ''; Season = 1; Episode = 1
              Poster = 'frame'; FramePage = 0; FrameSel = 1; Frames = @{}; Times = @{}; Own = $null
-             Duration = -1.0; Clip = $null; NoFrames = $false; Status = ''; EpGuessed = $false; Part = $null }
+             Duration = -1.0; Clip = $null; NoFrames = $false; Status = ''; EpGuessed = $false; Part = $null; Year = '' }
     if ($base -match '^(.*?)[\s._\-]*[Ss](\d{1,2})[\s._]?[Ee](\d{1,3})(.*)$' -or
         $base -match '^(.*?)[\s._\-]+(\d{1,2})x(\d{2,3})(.*)$') {
         $it.Shelf = 1
@@ -139,6 +139,7 @@ function New-Item-For([string]$path) {
         if ($known) { $it.Show = $known }
         return $it
     }
+    if ($base -match '(?<!\d)(19\d{2}|20\d{2})(?!\d)') { $it.Year = $Matches[1] }
     $t = Clean-Name $base
     $t = ($t -replace '\s*\(?\b(19|20)\d{2}\b\)?\s*$', '').Trim()
     if (-not $t) { $t = Clean-Name $base }
@@ -147,11 +148,47 @@ function New-Item-For([string]$path) {
     return $it
 }
 
-function Existing-Shows {
-    if (-not $script:OutRoot) { return @() }
-    $dir = Join-Path $script:OutRoot 'Shows'
-    if (-not (Test-Path -LiteralPath $dir)) { return @() }
-    return @(Get-ChildItem -LiteralPath $dir -Directory | Sort-Object Name | ForEach-Object { $_.Name })
+function Strip-Year([string]$s) { return ($s -replace '\s*[\(\[](18|19|20)\d{2}[\)\]]\s*$', '').Trim() }
+
+# Show folders already in the output, anywhere under VIDEO: lower-case name
+# (without its year) -> @{ Name; Path }.
+function Show-Dirs {
+    $map = @{}
+    if (-not $script:OutRoot -or -not (Test-Path -LiteralPath $script:OutRoot)) { return $map }
+    foreach ($e in (Find-Coverables $script:OutRoot)) {
+        if ($e.Kind -ne 'show') { continue }
+        $n = Strip-Year (Split-Path $e.Path -Leaf)
+        if (-not $map.ContainsKey($n.ToLower())) { $map[$n.ToLower()] = @{ Name = $n; Path = $e.Path } }
+    }
+    return $map
+}
+
+function Existing-Shows { return @((Show-Dirs).Values | ForEach-Object { $_.Name } | Sort-Object) }
+
+# The year a show started, from TVmaze, or ''.
+$ShowYears = @{}
+function Show-Year([string]$show) {
+    $k = $show.Trim().ToLower()
+    if (-not $k) { return '' }
+    if ($ShowYears.ContainsKey($k)) { return $ShowYears[$k] }
+    $y = ''
+    try {
+        $r = Invoke-RestMethod -Uri ("https://api.tvmaze.com/singlesearch/shows?q=" + [uri]::EscapeDataString($show.Trim())) -TimeoutSec 8
+        if ($r.premiered -and $r.premiered.Length -ge 4) { $y = $r.premiered.Substring(0, 4) }
+    } catch { }
+    $ShowYears[$k] = $y
+    return $y
+}
+
+# Where a show's folder is: the one already there, or a new
+# VIDEO\Movies\<Show> (<year>) beside the movies.
+function Show-Dir([string]$show) {
+    $n = Safe-Name (Strip-Year $show)
+    $m = Show-Dirs
+    if ($m.ContainsKey($n.ToLower())) { return $m[$n.ToLower()].Path }
+    $y = Show-Year $n
+    $leaf = $(if ($y) { "$n ($y)" } else { $n })
+    return Join-Path (Join-Path $script:OutRoot 'Movies') $leaf
 }
 
 # What's still missing before an item can be filed, or ''.
@@ -170,6 +207,7 @@ function Boro-Name($it) {
         return $s
     }
     if (-not $it.Title.Trim()) { return '?' }
+    if ($it.Shelf -eq 0 -and $it.Year) { return "$($it.Title.Trim()) ($($it.Year))" }
     return $it.Title.Trim()
 }
 
@@ -177,11 +215,13 @@ function Target-Path($it) {
     $folder = Join-Path $script:OutRoot $Shelves[$it.Shelf].Folder
     $title = Safe-Name $it.Title
     if ($it.Shelf -eq 1) {
-        $show = Safe-Name $it.Show
+        $show = Safe-Name (Strip-Year $it.Show)
         $file = '{0} S{1:D2}E{2:D2}' -f $show, [int]$it.Season, [int]$it.Episode
         if ($title) { $file += " $title" }
-        return Join-Path (Join-Path (Join-Path $folder $show) ("Season {0}" -f [int]$it.Season)) "$file.mp4"
+        return Join-Path (Join-Path (Show-Dir $it.Show) ("Season {0}" -f [int]$it.Season)) "$file.mp4"
     }
+    # Boro shows the year from "(1999)" at the end of the name.
+    if ($it.Shelf -eq 0 -and $it.Year -match '^\d{4}$') { $title += " ($($it.Year))" }
     return Join-Path $folder "$title.mp4"
 }
 
@@ -256,7 +296,7 @@ function Find-Cover([string]$show) {
 }
 
 function Has-Cover([string]$show) {
-    $dir = Join-Path (Join-Path $script:OutRoot 'Shows') (Safe-Name $show)
+    $dir = Show-Dir $show
     foreach ($n in 'cover', 'poster', 'folder') {
         foreach ($e in '.jpg', '.jpeg', '.png') { if (Test-Path -LiteralPath (Join-Path $dir "$n$e")) { return $true } }
     }
@@ -699,6 +739,11 @@ $ShowBox = New-Object Windows.Forms.ComboBox
 $ShowBox.Location = New-Object Drawing.Point(0, 182); $ShowBox.Size = New-Object Drawing.Size(196, 21); $ShowBox.DropDownStyle = 'DropDown'
 $P2.Controls.Add($ShowBox)
 $SeasonLabel = New-Label 'Season:' 206 166 70 $Bold; $P2.Controls.Add($SeasonLabel)
+# Movies only: shows get their year from TVmaze.
+$YearLabel = New-Label 'Year:' 0 166 60 $Bold; $P2.Controls.Add($YearLabel)
+$YearBox = New-Object Windows.Forms.TextBox
+$YearBox.Location = New-Object Drawing.Point(0, 182); $YearBox.Size = New-Object Drawing.Size(50, 21); $YearBox.MaxLength = 4
+$P2.Controls.Add($YearBox)
 $SeasonBox = New-Object Windows.Forms.NumericUpDown
 $SeasonBox.Location = New-Object Drawing.Point(206, 182); $SeasonBox.Size = New-Object Drawing.Size(60, 21); $SeasonBox.Minimum = 1; $SeasonBox.Maximum = 99
 $P2.Controls.Add($SeasonBox)
@@ -748,7 +793,7 @@ function Load-Editor {
     foreach ($c in @($Radios + @($ShowBox, $SeasonBox, $EpBox, $TitleBox))) { $c.Enabled = [bool]$it }
     if ($it) {
         $Radios[$it.Shelf].Checked = $true
-        $ShowBox.Text = $it.Show; $SeasonBox.Value = $it.Season; $EpBox.Value = $it.Episode; $TitleBox.Text = $it.Title
+        $ShowBox.Text = $it.Show; $SeasonBox.Value = $it.Season; $EpBox.Value = $it.Episode; $TitleBox.Text = $it.Title; $YearBox.Text = $it.Year
         # Several rows: shelf, show and season go to all of them; titles one at a time.
         $one = $Table.SelectedItems.Count -eq 1
         $EpBox.Enabled = $one; $TitleBox.Enabled = $one
@@ -762,6 +807,7 @@ function Update-Editor {
     $it = Selected-Item
     $tv = $it -and $it.Shelf -eq 1
     foreach ($c in @($ShowLabel, $ShowBox, $SeasonLabel, $SeasonBox, $EpLabel, $EpBox)) { $c.Visible = $tv }
+    foreach ($c in @($YearLabel, $YearBox)) { $c.Visible = $it -and $it.Shelf -eq 0 }
     if ($tv) { $TitleLabel.Text = 'Episode title (optional):' } elseif ($it -and $it.Shelf -eq 2) { $TitleLabel.Text = 'Artist - Song:' } else { $TitleLabel.Text = 'Title:' }
     if (-not $it) { $ShowsAs.Text = ''; return }
     if ($Table.SelectedItems.Count -gt 1) {
@@ -797,6 +843,7 @@ function Save-Editor([string]$field) {
             'season'  { $it.Season = [int]$SeasonBox.Value; $it.Shelf = 1 }
             'episode' { if ($rows.Count -eq 1) { $it.Episode = [int]$EpBox.Value } }
             'title'   { if ($rows.Count -eq 1) { $it.Title = $TitleBox.Text } }
+            'year'    { $it.Year = $YearBox.Text.Trim() }
         }
         Update-Row $row
     }
@@ -1096,7 +1143,7 @@ $SplitBtn.Add_Click({ Show-SplitDialog })
 foreach ($r in $Radios) { $r.Add_CheckedChanged({ if ($this.Checked) { Save-Editor 'shelf' } }) }
 $ShowBox.Add_TextChanged({ Save-Editor 'show' }); $ShowBox.Add_SelectedIndexChanged({ Save-Editor 'show' })
 $SeasonBox.Add_ValueChanged({ Save-Editor 'season' }); $EpBox.Add_ValueChanged({ Save-Editor 'episode' })
-$TitleBox.Add_TextChanged({ Save-Editor 'title' })
+$TitleBox.Add_TextChanged({ Save-Editor 'title' }); $YearBox.Add_TextChanged({ Save-Editor 'year' })
 
 # ---- Step 3: posters ----
 $P3 = New-Page
@@ -1288,7 +1335,7 @@ function Brew-Line($it) {
     $name = Boro-Name $it
     if ($it.Shelf -eq 1) { $name = "$($it.Show.Trim()) $name" }
     $where = $Shelves[$it.Shelf].Folder
-    if ($it.Shelf -eq 1) { $where = "Shows\$(Safe-Name $it.Show)\Season $($it.Season)" }
+    if ($it.Shelf -eq 1) { $where = (Split-Path (Target-Path $it)).Substring($script:OutRoot.Length + 1) }
     $mark = switch ($it.Status) { 'done' { 'OK' } 'busy' { '...' } 'failed' { 'X' } default { '' } }
     return ('{0,-4}{1}  ->  {2}' -f $mark, $name, $where)
 }

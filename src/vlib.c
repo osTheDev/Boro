@@ -285,6 +285,23 @@ static int is_mp4(const char *name)
     return n > 4 && (!strcasecmp(name + n - 4, ".mp4") || !strcasecmp(name + n - 4, ".m4v"));
 }
 
+// Takes a year like " (1999)" or " [1999]" off the end of a name.
+static int take_year(char *s)
+{
+    int n = strlen(s);
+    while (n && s[n - 1] == ' ') n--;
+    if (n < 6 || (s[n - 1] != ')' && s[n - 1] != ']')) return 0;
+    char *o = s + n - 6;
+    if (*o != '(' && *o != '[') return 0;
+    for (int i = 1; i <= 4; i++) if (!isdigit((u8)o[i])) return 0;
+    int y = atoi(o + 1);
+    if (y < 1880 || y > 2100) return 0;
+    while (o > s && o[-1] == ' ') o--;
+    if (o == s) return 0;      // a name that's only a year stays
+    *o = 0;
+    return y;
+}
+
 static void make_title(char *out, int size, const char *name)
 {
     snprintf(out, size, "%s", name);
@@ -366,6 +383,7 @@ static int add_show(const char *name, const char *dir)
     memset(s, 0, sizeof(*s));
     snprintf(s->name, sizeof(s->name), "%s", name);
     for (char *p = s->name; *p; p++) if (*p == '_') *p = ' ';
+    s->year = take_year(s->name);
     snprintf(s->dir, sizeof(s->dir), "%s", dir);
     return show_count++;
 }
@@ -450,6 +468,7 @@ static void walk(const char *dir, int category, int show, int season, int shows_
             strcpy(v->path, path);
             v->fit = -1;
             make_title(v->title, sizeof(v->title), ent.d_name);
+            v->year = take_year(v->title);
             v->category = category;
             v->show = show;
             if (show >= 0) {
