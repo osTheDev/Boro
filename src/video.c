@@ -830,7 +830,15 @@ static void draw_grid(float dt)
         ui_round_corners(x, y, tw, th, 6, BG);
         split_name(v->title, artist, sizeof(artist), song, sizeof(song));
         font_draw_fit(f_tiny, x, y + th + 12, song, on ? TEXT : MUTED, tw);
-        if (*artist) font_draw_fit(f_chip, x, y + th + 23, artist, DIM, tw);
+        // The year at the right of the artist line, so a long name can't push it off.
+        float yw = 0;
+        if (v->year) {
+            char yr[8];
+            snprintf(yr, sizeof(yr), "%d", v->year);
+            yw = font_width(f_chip, yr, 0) + 6;
+            font_draw_right(f_chip, x + tw, y + th + 23, yr, DIM);
+        }
+        if (*artist) font_draw_fit(f_chip, x, y + th + 23, artist, DIM, tw - yw);
     }
     gfx_unclip();
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);

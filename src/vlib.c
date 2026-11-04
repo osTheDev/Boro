@@ -285,21 +285,25 @@ static int is_mp4(const char *name)
     return n > 4 && (!strcasecmp(name + n - 4, ".mp4") || !strcasecmp(name + n - 4, ".m4v"));
 }
 
-// Takes a year like " (1999)" or " [1999]" off the end of a name.
+// Takes a year like "(1999)" or "[1999]" out of a name, wherever it sits
+// ("Doc (2019) Director's Cut" too).
 static int take_year(char *s)
 {
-    int n = strlen(s);
-    while (n && s[n - 1] == ' ') n--;
-    if (n < 6 || (s[n - 1] != ')' && s[n - 1] != ']')) return 0;
-    char *o = s + n - 6;
-    if (*o != '(' && *o != '[') return 0;
-    for (int i = 1; i <= 4; i++) if (!isdigit((u8)o[i])) return 0;
-    int y = atoi(o + 1);
-    if (y < 1880 || y > 2100) return 0;
-    while (o > s && o[-1] == ' ') o--;
-    if (o == s) return 0;      // a name that's only a year stays
-    *o = 0;
-    return y;
+    for (char *o = s; *o; o++) {
+        if ((*o != '(' && *o != '[') || !o[1]) continue;
+        int ok = 1;
+        for (int i = 1; i <= 4; i++) if (!isdigit((u8)o[i])) { ok = 0; break; }
+        if (!ok || (o[5] != ')' && o[5] != ']')) continue;
+        int y = atoi(o + 1);
+        if (y < 1880 || y > 2100) continue;
+        char *a = o, *b = o + 6;
+        while (a > s && a[-1] == ' ') a--;
+        if (a == s && !*b) return 0;     // a name that's only a year stays
+        while (*b == ' ' && a == s) b++;  // a year first: no leading space (b's space joins the halves otherwise)
+        memmove(a, b, strlen(b) + 1);
+        return y;
+    }
+    return 0;
 }
 
 static void make_title(char *out, int size, const char *name)
