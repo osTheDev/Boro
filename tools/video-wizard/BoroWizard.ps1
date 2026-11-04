@@ -1018,6 +1018,9 @@ function Show-SplitDialog {
             for ($t = $len; $t -lt $scan.Duration - $len / 3; $t += $len) {
                 $best = 0
                 for ($i = 0; $i -lt $chs.Count; $i++) { if ([Math]::Abs($chs[$i].Start - $t) -lt [Math]::Abs($chs[$best].Start - $t)) { $best = $i } }
+                # A short chapter at the seam is the last episode's preview or tag:
+                # the next episode starts after it.
+                if ($chs[$best].Len -lt 60 -and $best + 1 -lt $chs.Count -and [Math]::Abs($chs[$best + 1].Start - $t) -lt 180) { $best++ }
                 if ($best -gt $last) {
                     $list.SetItemChecked($best, $true)
                     $t = $chs[$best].Start    # count on from where the episode really started
