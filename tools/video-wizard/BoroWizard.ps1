@@ -207,7 +207,7 @@ function Boro-Name($it) {
         return $s
     }
     if (-not $it.Title.Trim()) { return '?' }
-    if ($it.Shelf -eq 0 -and $it.Year) { return "$($it.Title.Trim()) ($($it.Year))" }
+    if ($it.Shelf -ne 1 -and $it.Year) { return "$($it.Title.Trim()) ($($it.Year))" }
     return $it.Title.Trim()
 }
 
@@ -221,7 +221,7 @@ function Target-Path($it) {
         return Join-Path (Join-Path (Show-Dir $it.Show) ("Season {0}" -f [int]$it.Season)) "$file.mp4"
     }
     # Boro shows the year from "(1999)" at the end of the name.
-    if ($it.Shelf -eq 0 -and $it.Year -match '^\d{4}$') { $title += " ($($it.Year))" }
+    if ($it.Shelf -ne 1 -and $it.Year -match '^\d{4}$') { $title += " ($($it.Year))" }
     return Join-Path $folder "$title.mp4"
 }
 
@@ -739,7 +739,7 @@ $ShowBox = New-Object Windows.Forms.ComboBox
 $ShowBox.Location = New-Object Drawing.Point(0, 182); $ShowBox.Size = New-Object Drawing.Size(196, 21); $ShowBox.DropDownStyle = 'DropDown'
 $P2.Controls.Add($ShowBox)
 $SeasonLabel = New-Label 'Season:' 206 166 70 $Bold; $P2.Controls.Add($SeasonLabel)
-# Movies only: shows get their year from TVmaze.
+# Everything but TV: shows get their year from TVmaze.
 $YearLabel = New-Label 'Year:' 0 166 60 $Bold; $P2.Controls.Add($YearLabel)
 $YearBox = New-Object Windows.Forms.TextBox
 $YearBox.Location = New-Object Drawing.Point(0, 182); $YearBox.Size = New-Object Drawing.Size(50, 21); $YearBox.MaxLength = 4
@@ -807,7 +807,7 @@ function Update-Editor {
     $it = Selected-Item
     $tv = $it -and $it.Shelf -eq 1
     foreach ($c in @($ShowLabel, $ShowBox, $SeasonLabel, $SeasonBox, $EpLabel, $EpBox)) { $c.Visible = $tv }
-    foreach ($c in @($YearLabel, $YearBox)) { $c.Visible = $it -and $it.Shelf -eq 0 }
+    foreach ($c in @($YearLabel, $YearBox)) { $c.Visible = $it -and $it.Shelf -ne 1 }
     if ($tv) { $TitleLabel.Text = 'Episode title (optional):' } elseif ($it -and $it.Shelf -eq 2) { $TitleLabel.Text = 'Artist - Song:' } else { $TitleLabel.Text = 'Title:' }
     if (-not $it) { $ShowsAs.Text = ''; return }
     if ($Table.SelectedItems.Count -gt 1) {
