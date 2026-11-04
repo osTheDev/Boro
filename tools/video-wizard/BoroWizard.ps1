@@ -934,7 +934,8 @@ function Scan-Chapters([string]$path) {
 }
 
 function Parse-Time([string]$s) {
-    $parts = $s.Trim().Split(':')
+    # 23.40 is a typo for 23:40 here; nobody splits on fractions of a second.
+    $parts = $s.Trim().Replace('.', ':').Split(':')
     $v = 0.0
     foreach ($x in $parts) { $v = $v * 60 + [double]::Parse($x, [Globalization.CultureInfo]::InvariantCulture) }
     return $v
@@ -950,7 +951,7 @@ function Show-SplitDialog {
     $chs = @($scan.Chapters)
 
     $d = New-Object Windows.Forms.Form
-    $d.Text = 'Split into episodes'; $d.ClientSize = New-Object Drawing.Size(400, 360)
+    $d.Text = 'Split into episodes'; $d.ClientSize = New-Object Drawing.Size(400, 404)
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
     $d.StartPosition = 'CenterParent'; $d.BackColor = $Gray; $d.Font = $Font
     $d.Controls.Add((New-Label (Split-Path $src -Leaf) 10 8 380 $Bold))
@@ -977,24 +978,28 @@ function Show-SplitDialog {
     $times = New-Object Windows.Forms.TextBox
     $times.Location = New-Object Drawing.Point(10, 228); $times.Size = New-Object Drawing.Size(380, 21)
     $d.Controls.Add($times)
-    $d.Controls.Add((New-Label 'Show:' 10 258 40))
+    $preview = New-Object Windows.Forms.Label
+    $preview.Location = New-Object Drawing.Point(10, 254); $preview.Size = New-Object Drawing.Size(380, 44); $preview.ForeColor = $Dim
+    $d.Controls.Add($preview)
+    $total = $scan.Duration; if ($total -le 0) { $total = Get-Duration $it }
+    $d.Controls.Add((New-Label 'Show:' 10 302 40))
     $show = New-Object Windows.Forms.TextBox
-    $show.Location = New-Object Drawing.Point(52, 256); $show.Size = New-Object Drawing.Size(170, 21)
+    $show.Location = New-Object Drawing.Point(52, 300); $show.Size = New-Object Drawing.Size(170, 21)
     $show.Text = $(if ($it.Show.Trim()) { $it.Show.Trim() } else { $it.Title.Trim() })
     $d.Controls.Add($show)
-    $d.Controls.Add((New-Label 'Season:' 230 258 46))
+    $d.Controls.Add((New-Label 'Season:' 230 302 46))
     $season = New-Object Windows.Forms.NumericUpDown
-    $season.Location = New-Object Drawing.Point(276, 256); $season.Size = New-Object Drawing.Size(40, 21); $season.Minimum = 1; $season.Maximum = 99
+    $season.Location = New-Object Drawing.Point(276, 300); $season.Size = New-Object Drawing.Size(40, 21); $season.Minimum = 1; $season.Maximum = 99
     $d.Controls.Add($season)
-    $d.Controls.Add((New-Label 'First ep:' 322 258 46))
+    $d.Controls.Add((New-Label 'First ep:' 322 302 46))
     $first = New-Object Windows.Forms.NumericUpDown
-    $first.Location = New-Object Drawing.Point(322, 274); $first.Size = New-Object Drawing.Size(48, 21); $first.Minimum = 1; $first.Maximum = 999
+    $first.Location = New-Object Drawing.Point(322, 318); $first.Size = New-Object Drawing.Size(48, 21); $first.Minimum = 1; $first.Maximum = 999
     $d.Controls.Add($first)
     $titles = New-Object Windows.Forms.CheckBox
-    $titles.Text = 'Get episode titles from TVmaze'; $titles.Location = New-Object Drawing.Point(10, 290); $titles.AutoSize = $true; $titles.Checked = $true
+    $titles.Text = 'Get episode titles from TVmaze'; $titles.Location = New-Object Drawing.Point(10, 334); $titles.AutoSize = $true; $titles.Checked = $true
     $d.Controls.Add($titles)
-    $ok = New-Button 'Split' 234 326; $ok.DialogResult = 'OK'; $d.Controls.Add($ok)
-    $no = New-Button 'Cancel' 315 326; $no.DialogResult = 'Cancel'; $d.Controls.Add($no); $d.CancelButton = $no
+    $ok = New-Button 'Split' 234 370; $ok.DialogResult = 'OK'; $d.Controls.Add($ok)
+    $no = New-Button 'Cancel' 315 370; $no.DialogResult = 'Cancel'; $d.Controls.Add($no); $d.CancelButton = $no
 
     # Ticks write the start times; typing your own switches to times.
     $st = @{ FromTicks = $false; Busy = $false }
@@ -1007,7 +1012,19 @@ function Show-SplitDialog {
         $times.Text = (@($on | Sort-Object | ForEach-Object { Format-Time $chs[$_].Start }) -join ', ')
         $st.FromTicks = $true; $st.Busy = $false
     })
-    $times.Add_TextChanged({ if (-not $st.Busy) { $st.FromTicks = $false } })
+    $times.Add_TextChanged({
+        if (-not $st.Busy) { $st.FromTicks = $false }
+        # What you'll get, so a typo shows before anything is cut.
+        try {
+            $ts = @($times.Text.Split(',;'.ToCharArray()) | Where-Object { $_.Trim() } | ForEach-Object { Parse-Time $_ } | Sort-Object)
+            $bits = @()
+            for ($k = 0; $k -lt $ts.Count; $k++) {
+                $end = $(if ($k + 1 -lt $ts.Count) { $ts[$k + 1] } else { $total })
+                $bits += ('Ep {0}: {1}-{2} ({3})' -f ($k + 1), (Format-Time $ts[$k]), (Format-Time $end), (Format-Time ($end - $ts[$k])))
+            }
+            $preview.Text = $bits -join '    '
+        } catch { $preview.Text = "Can't read those times. Use h:mm:ss, like 0:00, 23:40, 47:10." }
+    })
     $guess.Add_Click({
         $len = [double]$mins.Value * 60
         if ($chs.Count) {
@@ -1033,9 +1050,7 @@ function Show-SplitDialog {
             $times.Text = $ts -join ', '
         }
     })
-    # Every chapter about episode-length: every chapter is an episode.
-    if ($chs.Count -ge 2 -and -not ($chs | Where-Object { $_.Len -lt 600 })) { for ($i = 0; $i -lt $chs.Count; $i++) { $list.SetItemChecked($i, $true) } }
-    elseif ($chs.Count) { $list.SetItemChecked(0, $true) }
+    if ($chs.Count) { $list.SetItemChecked(0, $true) }
 
     if ($d.ShowDialog($Form) -ne 'OK') { return }
     $parts = @()
@@ -1047,7 +1062,7 @@ function Show-SplitDialog {
             $parts += @{ Chapters = "$($a + 1)-$($b + 1)"; Start = $chs[$a].Start; Len = $len }
         }
     } else {
-        try { $ts = @($times.Text.Split(',') | Where-Object { $_.Trim() } | ForEach-Object { Parse-Time $_ } | Sort-Object) }
+        try { $ts = @($times.Text.Split(',;'.ToCharArray()) | Where-Object { $_.Trim() } | ForEach-Object { Parse-Time $_ } | Sort-Object) }
         catch { [Windows.Forms.MessageBox]::Show("Those times can't be read. Use h:mm:ss, like 0:00, 23:40, 47:10.", 'Boro Video Wizard', 'OK', 'Warning') | Out-Null; return }
         for ($k = 0; $k -lt $ts.Count; $k++) {
             $len = $(if ($k + 1 -lt $ts.Count) { $ts[$k + 1] - $ts[$k] } else { 0.0 })   # 0: to the end
