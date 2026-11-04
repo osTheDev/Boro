@@ -407,18 +407,24 @@ static int short_number(const char *name)
 
 // A folder of episodes outside a TV folder (say MOVIE/Anime/<Show>): it has
 // season folders, or two or more numbered episodes, or one with a cover.
-static int looks_like_show(const char *dir)
+static int looks_like_show(const char *dir, int nested)
 {
     SceUID d = sceIoDopen(dir);
     if (d < 0) return 0;
     SceIoDirent ent;
-    int episodes = 0, seasons = 0, cover = 0;
+    int episodes = 0, seasons = 0, cover = 0, group = 0;
+    char sub[512];
     for (;;) {
         memset(&ent, 0, sizeof(ent));
         if (sceIoDread(d, &ent) <= 0) break;
         if (ent.d_name[0] == '.') continue;
         if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
             if (season_of_folder(ent.d_name)) seasons++;
+            // A folder of shows (Anime/FLCL, Anime/...) is a group, not a show.
+            else if (!nested && !group) {
+                snprintf(sub, sizeof(sub), "%s/%s", dir, ent.d_name);
+                group = looks_like_show(sub, 1);
+            }
         } else if (is_mp4(ent.d_name)) {
             int sn = 0, ep = 0;
             episode_of_name(ent.d_name, &sn, &ep);
@@ -429,7 +435,35 @@ static int looks_like_show(const char *dir)
         }
     }
     sceIoDclose(d);
+    if (group) return 0;
     return seasons > 0 || episodes >= 2 || (cover && episodes > 0);
+}
+
+// The show in a loose episode's name: "FLCL" from "FLCL S01E03 Title.mp4".
+static int show_prefix(const char *name, char *out, int size)
+{
+    for (const char *p = name; *p; p++) {
+        if (p == name || isalnum((u8)p[-1])) continue;
+        const char *q = p;
+        if ((*q == 'S' || *q == 's') && isdigit((u8)q[1])) {
+            q++; while (isdigit((u8)*q)) q++;
+            if (!((*q == 'E' || *q == 'e') && isdigit((u8)q[1]))) continue;
+        } else continue;
+        int n = p - name;
+        while (n > 0 && (name[n - 1] == ' ' || name[n - 1] == '-' || name[n - 1] == '.' || name[n - 1] == '_')) n--;
+        if (n <= 0) return 0;
+        snprintf(out, size, "%.*s", n, name);
+        for (char *c = out; *c; c++) if (*c == '.' || *c == '_') *c = ' ';
+        return 1;
+    }
+    return 0;
+}
+
+// A show found by its folder, made the first time it's seen.
+static int find_show(const char *name, const char *dir)
+{
+    for (int i = 0; i < show_count; i++) if (!strcasecmp(shows[i].dir, dir)) return i;
+    return add_show(name, dir);
 }
 
 static void walk(const char *dir, int category, int show, int season, int shows_root, int depth)
@@ -451,9 +485,12 @@ static void walk(const char *dir, int category, int show, int season, int shows_
                 int c = category_of(ent.d_name);
                 walk(path, c, -1, 0, c == VCAT_SHOWS, depth + 1);
             } else if (shows_root) {
-                walk(path, category, add_show(ent.d_name, path), 0, 0, depth + 1);
-            } else if (show < 0 && category != VCAT_CLIPS && looks_like_show(path)) {
-                walk(path, VCAT_SHOWS, add_show(ent.d_name, path), 0, 0, depth + 1);
+                walk(path, category, find_show(ent.d_name, path), 0, 0, depth + 1);
+            } else if (show < 0 && category != VCAT_CLIPS && looks_like_show(path, 0)) {
+                walk(path, VCAT_SHOWS, find_show(ent.d_name, path), 0, 0, depth + 1);
+            } else if (show >= 0 && !season_of_folder(ent.d_name) && looks_like_show(path, 0)) {
+                // Another show inside this one's folder: its own show.
+                walk(path, VCAT_SHOWS, find_show(ent.d_name, path), 0, 0, depth + 1);
             } else {
                 int sn = show >= 0 ? season_of_folder(ent.d_name) : 0;
                 walk(path, category, show, sn ? sn : season, 0, depth + 1);
@@ -471,7 +508,17 @@ static void walk(const char *dir, int category, int show, int season, int shows_
             v->year = take_year(v->title);
             v->category = category;
             v->show = show;
-            if (show >= 0) {
+            // A loose "Show S01E03" among movies: under its show, as if in
+            // a folder of its own (its poster can be <Show>.jpg beside it).
+            char sname[96], sdir[300];
+            if (show < 0 && (category == VCAT_MOVIES || category == VCAT_OTHER) &&
+                show_prefix(ent.d_name, sname, sizeof(sname)) &&
+                snprintf(sdir, sizeof(sdir), "%s/%s", dir, sname) < (int)sizeof(shows->dir)) {
+                v->show = find_show(sname, sdir);
+                v->category = VCAT_SHOWS;
+            }
+            if (v->show >= 0) {
+                int show = v->show;
                 v->season = season;
                 episode_of_name(ent.d_name, &v->season, &v->episode);
                 shows[show].count++;
