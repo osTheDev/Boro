@@ -1332,7 +1332,7 @@ function Start-Next {
     $script:Job = @{ Item = $it; Out = $out; Json = $json; Err = $err; Proc = $p; Progress = 0.0; Eta = -1 }
     $it.Status = 'busy'
     Fill-Brew
-    Write-Log "Converting $($it.Src)"
+    Write-Log "Converting $($it.Src) with: $($hb -join ' ')"
 }
 
 # The last progress HandBrake wrote, from its JSON output.
