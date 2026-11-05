@@ -239,7 +239,41 @@ function Unique-Path([string]$path) {
 function Load-Image([string]$path) {
     $bytes = [IO.File]::ReadAllBytes($path)
     $ms = New-Object IO.MemoryStream(, $bytes)
-    return [Drawing.Image]::FromStream($ms)
+    try { return [Drawing.Image]::FromStream($ms) } catch { }
+    # WebP, AVIF or HEIC (often saved from the web with a .jpg name): let Windows decode it.
+    $img = Load-ViaWindows $path
+    if ($img) { return $img }
+    throw "Can't read $path"
+}
+
+# Decodes any picture Windows' Photos app can open, as a PNG in memory.
+function Load-ViaWindows([string]$path) {
+    if (-not (Init-WinRT)) { return $null }
+    try {
+        $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType = WindowsRuntime]
+        $null = [Windows.Graphics.Imaging.BitmapEncoder, Windows.Graphics, ContentType = WindowsRuntime]
+        $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics, ContentType = WindowsRuntime]
+        $null = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+        $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+        $in = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+        $dec = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($in)) ([Windows.Graphics.Imaging.BitmapDecoder])
+        $bmp = Await ($dec.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $bmp = [Windows.Graphics.Imaging.SoftwareBitmap]::Convert($bmp, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8,
+            [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)
+        $mem = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
+        $enc = Await ([Windows.Graphics.Imaging.BitmapEncoder]::CreateAsync([Windows.Graphics.Imaging.BitmapEncoder]::PngEncoderId, $mem)) ([Windows.Graphics.Imaging.BitmapEncoder])
+        $enc.SetSoftwareBitmap($bmp)
+        Await-Action ($enc.FlushAsync())
+        $mem.Seek(0)
+        $rs = [IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($mem)
+        $ms = New-Object IO.MemoryStream
+        $rs.CopyTo($ms); $rs.Dispose(); $in.Dispose()
+        $ms.Position = 0
+        return [Drawing.Image]::FromStream($ms)
+    } catch {
+        Write-Log "Windows couldn't read ${path}: $($_.Exception.Message)"
+        return $null
+    }
 }
 
 # Saves a picture as a JPEG no bigger than $max on its long side.
@@ -334,6 +368,13 @@ function Init-WinRT {
         $script:WinRT = $false
     }
     return $script:WinRT
+}
+function Await-Action($op) {
+    $m = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } |
+        Select-Object -First 1
+    $t = $m.Invoke($null, @($op))
+    if (-not $t.Wait(20000)) { throw 'Windows took too long' }
 }
 function Await($op, [Type]$type) {
     $t = $script:AsTask.MakeGenericMethod($type).Invoke($null, @($op))
@@ -1265,11 +1306,11 @@ function Show-Poster {
 
 function Pick-Picture {
     $dlg = New-Object Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'Pictures|*.jpg;*.jpeg;*.png;*.bmp;*.gif|All files|*.*'
+    $dlg.Filter = 'Pictures|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp;*.avif;*.heic|All files|*.*'
     if ($script:Folder) { $dlg.InitialDirectory = $script:Folder }
     if ($dlg.ShowDialog() -ne 'OK') { return $null }
     try { return Load-Image $dlg.FileName } catch {
-        [Windows.Forms.MessageBox]::Show("That picture can't be read.", 'Boro Video Wizard', 'OK', 'Warning') | Out-Null
+        [Windows.Forms.MessageBox]::Show("That picture can't be read. Open it in Paint, Save as JPEG, and try that copy.", 'Boro Video Wizard', 'OK', 'Warning') | Out-Null
         return $null
     }
 }
