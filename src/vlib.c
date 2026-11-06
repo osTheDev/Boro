@@ -89,9 +89,20 @@ static void save_resume(void)
     FILE *f = fopen(path, "w");
     if (!f) return;
     for (int i = 0; i < video_count; i++)
-        if (videos[i].watched)
+        if (videos[i].watched || videos[i].fit >= 0)   // keep a picked fit even after Start over
             fprintf(f, "%s\t%u\t%u\t%d\n", videos[i].path, (unsigned)videos[i].resume_ms, (unsigned)videos[i].watched, videos[i].fit);
     fclose(f);
+}
+
+void vlib_clear_resume(int index)
+{
+    if (index < 0 || index >= video_count) return;
+    Video *v = &videos[index];
+    if (!v->resume_ms) return;     // finished or never started: leave it be
+    v->resume_ms = 0;
+    v->watched = 0;
+    save_resume();
+    count_watched();
 }
 
 void vlib_set_resume(int index, u32 ms)
@@ -100,6 +111,8 @@ void vlib_set_resume(int index, u32 ms)
     Video *v = &videos[index];
     // The last half minute (or 5%) is credits: count it as finished.
     u32 d = v->duration_ms;
+    // Rewound to the start (or barely begun): not stopped partway at all.
+    if (ms < 15000) { vlib_clear_resume(index); return; }
     if (d && (ms + 30000 >= d || ms >= d / 20 * 19)) ms = 0;
     v->resume_ms = ms;
     v->watched = now_seconds();

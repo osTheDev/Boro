@@ -331,7 +331,7 @@ static int show_update(const Input *in)
     if (nav & PSP_CTRL_DOWN && show_sel < ep_count - 1) show_sel++;
     const Video *v = &videos[eps[show_sel]];
     if (p & PSP_CTRL_CROSS) start(eps[show_sel], resume_of(v));
-    else if (p & PSP_CTRL_TRIANGLE) start(eps[show_sel], 0);
+    else if (p & PSP_CTRL_TRIANGLE) { vlib_clear_resume(eps[show_sel]); start(eps[show_sel], 0); }
     return 0;
 }
 
@@ -351,6 +351,7 @@ static int tvm_update(const Input *in)
         if (it < 0) open_show(-it - 1);
         else start(it, resume_of(&videos[it]));
     } else if (p & PSP_CTRL_TRIANGLE && it >= 0) {
+        vlib_clear_resume(it);
         start(it, 0);
     }
     return 0;
@@ -415,7 +416,7 @@ static int browser_update(const Input *in, float dt)
     else if (nav & PSP_CTRL_DOWN && sel / GRID_COLS < (list_count - 1) / GRID_COLS) sel = list_count - 1;
     Video *v = &videos[list[sel]];
     if (p & PSP_CTRL_CROSS) start(list[sel], resume_of(v));
-    else if (p & PSP_CTRL_TRIANGLE) start(list[sel], 0);
+    else if (p & PSP_CTRL_TRIANGLE) { vlib_clear_resume(list[sel]); start(list[sel], 0); }
     return 0;
 }
 
@@ -712,7 +713,10 @@ static void tvm_draw(float dt)
             const Video *v = &videos[it];
             font_draw_fit(f_title, 14, y, v->title, TEXT, SCREEN_W - 28);
             year_note(v, note, sizeof(note));
-            snprintf(buf, sizeof(buf), "Movie%s%s \xC2\xB7 %s", *note ? " \xC2\xB7 " : "", note, resume_of(v) ? "Stopped partway" : v->watched ? "Watched" : "Not watched yet");
+            char at[40], ts[16];
+            if (resume_of(v)) { ui_format_time(ts, sizeof(ts), resume_of(v)); snprintf(at, sizeof(at), "Stopped at %s", ts); }
+            else snprintf(at, sizeof(at), "%s", v->watched ? "Watched" : "Not watched yet");
+            snprintf(buf, sizeof(buf), "Movie%s%s \xC2\xB7 %s", *note ? " \xC2\xB7 " : "", note, at);
             font_draw_fit(f_small, 14, y + 17, buf, MUTED, SCREEN_W - 28);
         }
     }

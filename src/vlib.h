@@ -51,6 +51,7 @@ void vlib_thumbs(int on);
 const Texture *vlib_thumb(int index); // 160x90, or NULL
 
 void vlib_set_resume(int index, u32 ms); // saves; ms near the end counts as finished
+void vlib_clear_resume(int index);       // back to not started (Start over)
 void vlib_set_fit(int index, int fit);
 int vlib_continue(void); // the latest video stopped partway, or -1
 
