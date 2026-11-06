@@ -540,6 +540,9 @@ static void draw_home_hero(float oy)
     font_draw(f_small_b, x + 22, by + 15, first, BG, 0);
 }
 
+// Poster row to the next heading: room for the names under the posters.
+#define HOME_ROW_GAP 44
+
 static void draw_home_row(int r, float y, float dt)
 {
     int n = row_count[r];
@@ -579,13 +582,13 @@ static void draw_home_row(int r, float y, float dt)
 static void home_draw(float dt)
 {
     // Moving to the second row slides the page up under the tabs.
-    float want = home_row == 1 && row_count[0] ? -(146 + POSTER_TH + 30 - 44) : 0;
+    float want = home_row == 1 && row_count[0] ? -(146 + POSTER_TH + HOME_ROW_GAP - 44) : 0;
     page_y = ui_approach(page_y, want, dt, 12);
     gfx_clip(0, 26, SCREEN_W, SCREEN_H - 26);
     draw_home_hero(page_y);
     gfx_unclip();
     float y = 146 + page_y;
-    if (row_count[0]) { draw_home_row(0, y, dt); y += POSTER_TH + 30; }
+    if (row_count[0]) { draw_home_row(0, y, dt); y += POSTER_TH + HOME_ROW_GAP; }
     draw_home_row(1, y, dt);
     int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
     const char *l[] = { "Open", hero >= 0 && resume_of(&videos[hero]) ? "Resume" : "Play newest", "Back" };
