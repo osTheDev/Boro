@@ -89,9 +89,20 @@ static void save_resume(void)
     FILE *f = fopen(path, "w");
     if (!f) return;
     for (int i = 0; i < video_count; i++)
-        if (videos[i].watched)
+        if (videos[i].watched || videos[i].fit >= 0)   // keep a picked fit even after Start over
             fprintf(f, "%s\t%u\t%u\t%d\n", videos[i].path, (unsigned)videos[i].resume_ms, (unsigned)videos[i].watched, videos[i].fit);
     fclose(f);
+}
+
+void vlib_clear_resume(int index)
+{
+    if (index < 0 || index >= video_count) return;
+    Video *v = &videos[index];
+    if (!v->resume_ms) return;     // finished or never started: leave it be
+    v->resume_ms = 0;
+    v->watched = 0;
+    save_resume();
+    count_watched();
 }
 
 void vlib_set_resume(int index, u32 ms)
@@ -100,6 +111,8 @@ void vlib_set_resume(int index, u32 ms)
     Video *v = &videos[index];
     // The last half minute (or 5%) is credits: count it as finished.
     u32 d = v->duration_ms;
+    // Rewound to the start (or barely begun): not stopped partway at all.
+    if (ms < 15000) { vlib_clear_resume(index); return; }
     if (d && (ms + 30000 >= d || ms >= d / 20 * 19)) ms = 0;
     v->resume_ms = ms;
     v->watched = now_seconds();
@@ -261,8 +274,9 @@ const Texture *vlib_show_poster(int show)
     snprintf(a, sizeof(a), "%s/cover", shows[show].dir);
     snprintf(b, sizeof(b), "%s/poster", shows[show].dir);
     snprintf(c, sizeof(c), "%s/folder", shows[show].dir);
-    const char *const stems[] = { a, b, c };
-    return poster(stems, 3);
+    // Or a picture named after the show beside its folder (Anime/<Show>.jpg).
+    const char *const stems[] = { a, b, c, shows[show].dir };
+    return poster(stems, 4);
 }
 
 const Texture *vlib_video_poster(int index)
@@ -282,6 +296,27 @@ static int is_mp4(const char *name)
 {
     int n = strlen(name);
     return n > 4 && (!strcasecmp(name + n - 4, ".mp4") || !strcasecmp(name + n - 4, ".m4v"));
+}
+
+// Takes a year like "(1999)" or "[1999]" out of a name, wherever it sits
+// ("Doc (2019) Director's Cut" too).
+static int take_year(char *s)
+{
+    for (char *o = s; *o; o++) {
+        if ((*o != '(' && *o != '[') || !o[1]) continue;
+        int ok = 1;
+        for (int i = 1; i <= 4; i++) if (!isdigit((u8)o[i])) { ok = 0; break; }
+        if (!ok || (o[5] != ')' && o[5] != ']')) continue;
+        int y = atoi(o + 1);
+        if (y < 1880 || y > 2100) continue;
+        char *a = o, *b = o + 6;
+        while (a > s && a[-1] == ' ') a--;
+        if (a == s && !*b) return 0;     // a name that's only a year stays
+        while (*b == ' ' && a == s) b++;  // a year first: no leading space (b's space joins the halves otherwise)
+        memmove(a, b, strlen(b) + 1);
+        return y;
+    }
+    return 0;
 }
 
 static void make_title(char *out, int size, const char *name)
@@ -365,11 +400,89 @@ static int add_show(const char *name, const char *dir)
     memset(s, 0, sizeof(*s));
     snprintf(s->name, sizeof(s->name), "%s", name);
     for (char *p = s->name; *p; p++) if (*p == '_') *p = ' ';
+    s->year = take_year(s->name);
     snprintf(s->dir, sizeof(s->dir), "%s", dir);
     return show_count++;
 }
 
 // shows_root: dir is the Shows folder itself, so each folder in it is a show.
+// A 1-3 digit number standing on its own in a file name ("FLCL 01",
+// "Show - 3"), not a year, "x264" or "480p".
+static int short_number(const char *name)
+{
+    const char *end = strrchr(name, '.');
+    if (!end) end = name + strlen(name);
+    for (const char *p = name; p < end; p++) {
+        if (!isdigit((u8)*p) || (p > name && isalnum((u8)p[-1]))) continue;
+        const char *q = p;
+        while (q < end && isdigit((u8)*q)) q++;
+        if (q - p <= 3 && (q == end || !isalnum((u8)*q))) return 1;
+        p = q - 1;
+    }
+    return 0;
+}
+
+// A folder of episodes outside a TV folder (say MOVIE/Anime/<Show>): it has
+// season folders, or two or more numbered episodes, or one with a cover.
+static int looks_like_show(const char *dir, int nested)
+{
+    SceUID d = sceIoDopen(dir);
+    if (d < 0) return 0;
+    SceIoDirent ent;
+    int episodes = 0, seasons = 0, cover = 0, group = 0;
+    char sub[512];
+    for (;;) {
+        memset(&ent, 0, sizeof(ent));
+        if (sceIoDread(d, &ent) <= 0) break;
+        if (ent.d_name[0] == '.') continue;
+        if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
+            if (season_of_folder(ent.d_name)) seasons++;
+            // A folder of shows (Anime/FLCL, Anime/...) is a group, not a show.
+            else if (!nested && !group) {
+                snprintf(sub, sizeof(sub), "%s/%s", dir, ent.d_name);
+                group = looks_like_show(sub, 1);
+            }
+        } else if (is_mp4(ent.d_name)) {
+            int sn = 0, ep = 0;
+            episode_of_name(ent.d_name, &sn, &ep);
+            if (ep > 0 || short_number(ent.d_name)) episodes++;
+        } else if (!strncasecmp(ent.d_name, "cover.", 6) || !strncasecmp(ent.d_name, "poster.", 7) ||
+                   !strncasecmp(ent.d_name, "folder.", 7)) {
+            cover = 1;
+        }
+    }
+    sceIoDclose(d);
+    if (group) return 0;
+    return seasons > 0 || episodes >= 2 || (cover && episodes > 0);
+}
+
+// The show in a loose episode's name: "FLCL" from "FLCL S01E03 Title.mp4".
+static int show_prefix(const char *name, char *out, int size)
+{
+    for (const char *p = name; *p; p++) {
+        if (p == name || isalnum((u8)p[-1])) continue;
+        const char *q = p;
+        if ((*q == 'S' || *q == 's') && isdigit((u8)q[1])) {
+            q++; while (isdigit((u8)*q)) q++;
+            if (!((*q == 'E' || *q == 'e') && isdigit((u8)q[1]))) continue;
+        } else continue;
+        int n = p - name;
+        while (n > 0 && (name[n - 1] == ' ' || name[n - 1] == '-' || name[n - 1] == '.' || name[n - 1] == '_')) n--;
+        if (n <= 0) return 0;
+        snprintf(out, size, "%.*s", n, name);
+        for (char *c = out; *c; c++) if (*c == '.' || *c == '_') *c = ' ';
+        return 1;
+    }
+    return 0;
+}
+
+// A show found by its folder, made the first time it's seen.
+static int find_show(const char *name, const char *dir)
+{
+    for (int i = 0; i < show_count; i++) if (!strcasecmp(shows[i].dir, dir)) return i;
+    return add_show(name, dir);
+}
+
 static void walk(const char *dir, int category, int show, int season, int shows_root, int depth)
 {
     if (depth > 5) return;
@@ -389,7 +502,12 @@ static void walk(const char *dir, int category, int show, int season, int shows_
                 int c = category_of(ent.d_name);
                 walk(path, c, -1, 0, c == VCAT_SHOWS, depth + 1);
             } else if (shows_root) {
-                walk(path, category, add_show(ent.d_name, path), 0, 0, depth + 1);
+                walk(path, category, find_show(ent.d_name, path), 0, 0, depth + 1);
+            } else if (show < 0 && category != VCAT_CLIPS && looks_like_show(path, 0)) {
+                walk(path, VCAT_SHOWS, find_show(ent.d_name, path), 0, 0, depth + 1);
+            } else if (show >= 0 && !season_of_folder(ent.d_name) && looks_like_show(path, 0)) {
+                // Another show inside this one's folder: its own show.
+                walk(path, VCAT_SHOWS, find_show(ent.d_name, path), 0, 0, depth + 1);
             } else {
                 int sn = show >= 0 ? season_of_folder(ent.d_name) : 0;
                 walk(path, category, show, sn ? sn : season, 0, depth + 1);
@@ -404,9 +522,20 @@ static void walk(const char *dir, int category, int show, int season, int shows_
             strcpy(v->path, path);
             v->fit = -1;
             make_title(v->title, sizeof(v->title), ent.d_name);
+            v->year = take_year(v->title);
             v->category = category;
             v->show = show;
-            if (show >= 0) {
+            // A loose "Show S01E03" among movies: under its show, as if in
+            // a folder of its own (its poster can be <Show>.jpg beside it).
+            char sname[96], sdir[300];
+            if (show < 0 && (category == VCAT_MOVIES || category == VCAT_OTHER) &&
+                show_prefix(ent.d_name, sname, sizeof(sname)) &&
+                snprintf(sdir, sizeof(sdir), "%s/%s", dir, sname) < (int)sizeof(shows->dir)) {
+                v->show = find_show(sname, sdir);
+                v->category = VCAT_SHOWS;
+            }
+            if (v->show >= 0) {
+                int show = v->show;
                 v->season = season;
                 episode_of_name(ent.d_name, &v->season, &v->episode);
                 shows[show].count++;
@@ -478,6 +607,47 @@ static void grab(const u32 *src, int w, int h, void *ctx)
     g->done = 1;
 }
 
+// A picture saved next to the video (Name.jpg, as the Video Wizard writes),
+// center-cropped into the thumbnail. Returns 1 if there was one.
+static int sidecar_thumb(const Video *v, u32 *px)
+{
+    static const char *const ext[] = { ".jpg", ".jpeg", ".png", ".JPG", ".PNG" };
+    char path[300];
+    for (int e = 0; e < 5; e++) {
+        snprintf(path, sizeof(path), "%s", v->path);
+        char *dot = strrchr(path, '.');
+        if (!dot || (int)(dot - path) + 6 >= (int)sizeof(path)) return 0;
+        strcpy(dot, ext[e]);
+        SceIoStat st;
+        if (sceIoGetstat(path, &st) < 0) continue;
+        int w = 0, h = 0;
+        u8 *img = image_load(path, THUMB_H * 2, &w, &h);
+        if (!img) continue;
+        float want = (float)THUMB_W / THUMB_H;
+        int cw = w, ch = h, cx = 0, cy = 0;
+        if ((float)w / h > want) { cw = h * want; cx = (w - cw) / 2; }
+        else { ch = w / want; cy = (h - ch) / 2; }
+        for (int y = 0; y < THUMB_H; y++) {
+            int y0 = cy + y * ch / THUMB_H, y1 = cy + (y + 1) * ch / THUMB_H;
+            if (y1 <= y0) y1 = y0 + 1;
+            for (int x = 0; x < THUMB_W; x++) {
+                int x0 = cx + x * cw / THUMB_W, x1 = cx + (x + 1) * cw / THUMB_W;
+                if (x1 <= x0) x1 = x0 + 1;
+                u32 r = 0, g = 0, b = 0, n = 0;
+                for (int yy = y0; yy < y1; yy++)
+                    for (int xx = x0; xx < x1; xx++) {
+                        const u8 *c = img + (yy * w + xx) * 4;
+                        r += c[0]; g += c[1]; b += c[2]; n++;
+                    }
+                px[y * THUMB_W + x] = (r / n) | (g / n) << 8 | (b / n) << 16 | 0xFF000000;
+            }
+        }
+        free(img);
+        return 1;
+    }
+    return 0;
+}
+
 static void make_thumb(Video *v)
 {
     static u32 px[THUMB_W * THUMB_H];
@@ -487,7 +657,8 @@ static void make_thumb(Video *v)
         h.duration_ms = m.duration_ms;
         h.width = m.width;
         h.height = m.height;
-        if (avc_open(&m) == 0) {
+        if (sidecar_thumb(v, px)) h.has_pixels = 1;
+        else if (avc_open(&m) == 0) {
             SceUID fd = sceIoOpen(v->path, PSP_O_RDONLY, 0);
             int s = mp4_keyframe_before(&m, mp4_sample_at(&m.video, m.duration_ms / 10));
             u32 cap = 0;

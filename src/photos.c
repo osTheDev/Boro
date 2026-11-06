@@ -40,7 +40,9 @@
 #define CELL_W (PTHUMB_W + 8)
 #define CELL_H (PTHUMB_H + 24)
 
-enum { VIEW_LIBRARY, VIEW_ALBUMS };
+// Library is by date; Grid is the same photos, newest first, with no day headings.
+enum { VIEW_LIBRARY, VIEW_GRID, VIEW_ALBUMS, VIEW_COUNT };
+static const char *const view_names[VIEW_COUNT] = { "By date", "Grid", "Albums" };
 
 typedef struct { int photo, video; u32 day, time; } Item; // photo or video is -1
 typedef struct { int head; int first, n; u32 day; float y; } Line;
@@ -145,13 +147,14 @@ static void build_library(void)
     line_count = 0;
     run_count = 0;
     float y = 0;
+    int by_date = view != VIEW_GRID;
     for (int i = 0; i < item_count; i++) {
-        if (!i || items[i].day != items[i - 1].day) {
+        if (by_date && (!i || items[i].day != items[i - 1].day)) {
             lines[line_count++] = (Line){ 1, i, 0, items[i].day, y };
             y += HEAD_H;
         }
-        Line *l = &lines[line_count - 1];
-        if (l->head || l->n == LIB_COLS || l->day != items[i].day) {
+        Line *l = line_count ? &lines[line_count - 1] : NULL;
+        if (!l || l->head || l->n == LIB_COLS || (by_date && l->day != items[i].day)) {
             lines[line_count++] = (Line){ 0, i, 0, items[i].day, y };
             y += LIB_STEP;
             l = &lines[line_count - 1];
@@ -420,7 +423,7 @@ static int deletable(void)
 {
     if (trash_open) return trash_count ? 0 : -1;
     if (album >= 0) return palbums[album].count ? palbums[album].first + sel : -1;
-    if (view == VIEW_LIBRARY && item_count) return items[sel].photo;
+    if (view != VIEW_ALBUMS && item_count) return items[sel].photo;
     return -1;
 }
 
@@ -505,9 +508,11 @@ int photos_update(const Input *in, float dt)
         return 0;
     }
     if (hold_t > 0 && hold_t < 0.6f && album < 0 && !trash_open) {
-        view = view == VIEW_LIBRARY ? VIEW_ALBUMS : VIEW_LIBRARY;
-        sel = 0;
-        scroll = 0;
+        int was = view;
+        view = (view + 1) % VIEW_COUNT;
+        // By date and Grid hold the same photos in the same order: keep the one picked.
+        if (view == VIEW_GRID) build_library();
+        else { sel = 0; scroll = 0; if (was == VIEW_GRID) build_library(); }
     }
     hold_t = 0;
     hold_fired = 0;
@@ -520,7 +525,7 @@ int photos_update(const Input *in, float dt)
         return 0;
     }
     if (p & PSP_CTRL_CIRCLE && album < 0) return 1;
-    return view == VIEW_LIBRARY ? library_update(in) : albums_update(in);
+    return view != VIEW_ALBUMS ? library_update(in) : albums_update(in);
 }
 
 // ---- Drawing ----------------------------------------------------------------
@@ -561,9 +566,9 @@ static void draw_tile(const Item *it, float x, float y, float s)
 
 static void draw_pills(void)
 {
-    static const char *const names[] = { "Library", "Albums" };
+    const char *const *names = view_names;
     float x = 14;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < VIEW_COUNT; i++) {
         float w = font_width(f_small, names[i], 0) + 18;
         if (i == view) gfx_nine(t_fill, 8, x, 32, w, 17, TEXT);
         else ui_ring(x, 32, w, 17, 8, CHIP);
@@ -768,12 +773,18 @@ void photos_draw(float dt)
         return;
     }
     draw_pills();
-    if (view == VIEW_LIBRARY) library_draw(dt);
+    if (view != VIEW_ALBUMS) library_draw(dt);
     else albums_draw(dt);
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
     x = hint(x, ICON_CIRCLE, "Back");
-    x = hint(x, ICON_SQUARE, view == VIEW_LIBRARY ? (item_count && items[sel].photo >= 0 ? "Albums (hold: delete)" : "Albums") : "Library");
-    if (view == VIEW_LIBRARY && item_count) {
+    {
+        static char sq[48];
+        const char *next = view_names[(view + 1) % VIEW_COUNT];
+        if (view != VIEW_ALBUMS && item_count && items[sel].photo >= 0) snprintf(sq, sizeof(sq), "%s (hold: delete)", next);
+        else snprintf(sq, sizeof(sq), "%s", next);
+        x = hint(x, ICON_SQUARE, sq);
+    }
+    if (view != VIEW_ALBUMS && item_count) {
         x = hint(x, ICON_TRIANGLE, "Next month");
         hint(x, ICON_CROSS, items[sel].video >= 0 ? "Play" : "View");
     } else if (view == VIEW_ALBUMS && (palbum_count || trash_count)) {

@@ -24,6 +24,7 @@ typedef struct {
     int fit;           // FIT_* picked while watching, -1 for the Settings default
     int show;          // index into shows, or -1
     int season, episode; // 0 when unknown
+    int year;          // from "(1999)" at the end of the name, or 0
 } Video;
 
 typedef struct {
@@ -31,6 +32,7 @@ typedef struct {
     char dir[256];
     int count;         // episodes
     int watched;       // episodes watched to the end
+    int year;          // from "(2000)" at the end of the folder name, or 0
 } Show;
 
 extern Video *videos;
@@ -49,6 +51,7 @@ void vlib_thumbs(int on);
 const Texture *vlib_thumb(int index); // 160x90, or NULL
 
 void vlib_set_resume(int index, u32 ms); // saves; ms near the end counts as finished
+void vlib_clear_resume(int index);       // back to not started (Start over)
 void vlib_set_fit(int index, int fit);
 int vlib_continue(void); // the latest video stopped partway, or -1
 

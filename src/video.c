@@ -273,7 +273,8 @@ static void open_show(int show)
 {
     static int all[512];
     show_open = show;
-    int n = vlib_episodes(show, all, 512), next = vlib_next_up(show);
+    // Opens on the first episode; the Next Up line still says where you left off.
+    int n = vlib_episodes(show, all, 512), next = n ? all[0] : -1;
     season_count = 0;
     for (int i = 0; i < n; i++) {
         int sn = videos[all[i]].season, dup = 0;
@@ -330,7 +331,7 @@ static int show_update(const Input *in)
     if (nav & PSP_CTRL_DOWN && show_sel < ep_count - 1) show_sel++;
     const Video *v = &videos[eps[show_sel]];
     if (p & PSP_CTRL_CROSS) start(eps[show_sel], resume_of(v));
-    else if (p & PSP_CTRL_TRIANGLE) start(eps[show_sel], 0);
+    else if (p & PSP_CTRL_TRIANGLE) { vlib_clear_resume(eps[show_sel]); start(eps[show_sel], 0); }
     return 0;
 }
 
@@ -350,6 +351,7 @@ static int tvm_update(const Input *in)
         if (it < 0) open_show(-it - 1);
         else start(it, resume_of(&videos[it]));
     } else if (p & PSP_CTRL_TRIANGLE && it >= 0) {
+        vlib_clear_resume(it);
         start(it, 0);
     }
     return 0;
@@ -414,7 +416,7 @@ static int browser_update(const Input *in, float dt)
     else if (nav & PSP_CTRL_DOWN && sel / GRID_COLS < (list_count - 1) / GRID_COLS) sel = list_count - 1;
     Video *v = &videos[list[sel]];
     if (p & PSP_CTRL_CROSS) start(list[sel], resume_of(v));
-    else if (p & PSP_CTRL_TRIANGLE) start(list[sel], 0);
+    else if (p & PSP_CTRL_TRIANGLE) { vlib_clear_resume(list[sel]); start(list[sel], 0); }
     return 0;
 }
 
@@ -523,7 +525,8 @@ static void draw_home_hero(float oy)
     else if (v->duration_ms) {
         char d[16];
         ui_format_time(d, sizeof(d), v->duration_ms);
-        snprintf(buf, sizeof(buf), "%s \xC2\xB7 %s", d, v->watched ? "Watched" : "Not watched yet");
+        if (v->year) snprintf(buf, sizeof(buf), "%d \xC2\xB7 %s \xC2\xB7 %s", v->year, d, v->watched ? "Watched" : "Not watched yet");
+        else snprintf(buf, sizeof(buf), "%s \xC2\xB7 %s", d, v->watched ? "Watched" : "Not watched yet");
     } else snprintf(buf, sizeof(buf), "%s", v->watched ? "Watched" : "Not watched yet");
     font_draw_fit(f_small, x, y + 42, buf, MUTED, w + 40);
     if (resume_of(v) && v->duration_ms) {
@@ -537,6 +540,9 @@ static void draw_home_hero(float oy)
     ui_icon(ICON_TRIANGLE, x + 8, by + 6, 10, BG);
     font_draw(f_small_b, x + 22, by + 15, first, BG, 0);
 }
+
+// Poster row to the next heading: room for the names under the posters.
+#define HOME_ROW_GAP 44
 
 static void draw_home_row(int r, float y, float dt)
 {
@@ -577,13 +583,13 @@ static void draw_home_row(int r, float y, float dt)
 static void home_draw(float dt)
 {
     // Moving to the second row slides the page up under the tabs.
-    float want = home_row == 1 && row_count[0] ? -(146 + POSTER_TH + 30 - 44) : 0;
+    float want = home_row == 1 && row_count[0] ? -(146 + POSTER_TH + HOME_ROW_GAP - 44) : 0;
     page_y = ui_approach(page_y, want, dt, 12);
     gfx_clip(0, 26, SCREEN_W, SCREEN_H - 26);
     draw_home_hero(page_y);
     gfx_unclip();
     float y = 146 + page_y;
-    if (row_count[0]) { draw_home_row(0, y, dt); y += POSTER_TH + 30; }
+    if (row_count[0]) { draw_home_row(0, y, dt); y += POSTER_TH + HOME_ROW_GAP; }
     draw_home_row(1, y, dt);
     int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
     const char *l[] = { "Open", hero >= 0 && resume_of(&videos[hero]) ? "Resume" : "Play newest", "Back" };
@@ -620,6 +626,16 @@ static void time_note(const Video *v, char *out, int size)
     }
 }
 
+// "1999 · 1h 26m" (either part may be missing).
+static void year_note(const Video *v, char *out, int size)
+{
+    char t[32];
+    time_note(v, t, sizeof(t));
+    if (v->year && *t) snprintf(out, size, "%d \xC2\xB7 %s", v->year, t);
+    else if (v->year) snprintf(out, size, "%d", v->year);
+    else snprintf(out, size, "%s", t);
+}
+
 static int season_total(int show)
 {
     int seen[64], n = 0;
@@ -643,7 +659,7 @@ static void tvm_draw(float dt)
     font_draw_right(f_small, SCREEN_W - 14, 44, buf, DIM);
     if (!tvm_count) {
         font_draw_center(f_title, SCREEN_W / 2, 130, tvm_filter == FILTER_MOVIES ? "No movies yet" : "No shows yet", TEXT);
-        font_draw_center(f_small, SCREEN_W / 2, 150, tvm_filter == FILTER_MOVIES ? "Movies go in VIDEO/Movies." : "Shows go in VIDEO/Shows/<Show>/.", MUTED);
+        font_draw_center(f_small, SCREEN_W / 2, 150, tvm_filter == FILTER_MOVIES ? "Movies go in VIDEO/Movies." : "Shows go in VIDEO/Movies/<Show>/.", MUTED);
     } else {
         float tw = 58, th = 84, gap = 7, ty = 58;
         tvm_scroll = ui_approach(tvm_scroll, tvm_sel > 0 ? tvm_sel - 1 : 0, dt, 14);
@@ -663,8 +679,12 @@ static void tvm_draw(float dt)
                 font_draw(f_chip, px + 6, ty + 11, "MOVIE", TEXT, 0);
             }
             font_draw_fit(f_tiny, px, ty + th + 12, it < 0 ? shows[-it - 1].name : videos[it].title, on ? TEXT : MUTED, tw);
-            if (it < 0) { int n = season_total(-it - 1); snprintf(note, sizeof(note), "%d season%s", n, n == 1 ? "" : "s"); }
-            else time_note(&videos[it], note, sizeof(note));
+            if (it < 0) {
+                int n = season_total(-it - 1), yr = shows[-it - 1].year;
+                if (yr) snprintf(note, sizeof(note), "%d \xC2\xB7 %d season%s", yr, n, n == 1 ? "" : "s");
+                else snprintf(note, sizeof(note), "%d season%s", n, n == 1 ? "" : "s");
+            }
+            else year_note(&videos[it], note, sizeof(note));
             font_draw_fit(f_chip, px, ty + th + 23, note, DIM, tw);
         }
         gfx_unclip();
@@ -675,7 +695,9 @@ static void tvm_draw(float dt)
             const Show *sh = &shows[-it - 1];
             int n = season_total(-it - 1);
             font_draw_fit(f_title, 14, y, sh->name, TEXT, SCREEN_W - 28);
-            snprintf(buf, sizeof(buf), "Show \xC2\xB7 %d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
+            char yr[16] = "";
+            if (sh->year) snprintf(yr, sizeof(yr), " \xC2\xB7 %d", sh->year);
+            snprintf(buf, sizeof(buf), "Show%s \xC2\xB7 %d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", yr, n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
             font_draw_fit(f_small, 14, y + 17, buf, MUTED, SCREEN_W - 28);
             int nx = vlib_next_up(-it - 1);
             if (nx >= 0) {
@@ -690,8 +712,11 @@ static void tvm_draw(float dt)
         } else {
             const Video *v = &videos[it];
             font_draw_fit(f_title, 14, y, v->title, TEXT, SCREEN_W - 28);
-            time_note(v, note, sizeof(note));
-            snprintf(buf, sizeof(buf), "Movie%s%s \xC2\xB7 %s", *note ? " \xC2\xB7 " : "", note, resume_of(v) ? "Stopped partway" : v->watched ? "Watched" : "Not watched yet");
+            year_note(v, note, sizeof(note));
+            char at[40], ts[16];
+            if (resume_of(v)) { ui_format_time(ts, sizeof(ts), resume_of(v)); snprintf(at, sizeof(at), "Stopped at %s", ts); }
+            else snprintf(at, sizeof(at), "%s", v->watched ? "Watched" : "Not watched yet");
+            snprintf(buf, sizeof(buf), "Movie%s%s \xC2\xB7 %s", *note ? " \xC2\xB7 " : "", note, at);
             font_draw_fit(f_small, 14, y + 17, buf, MUTED, SCREEN_W - 28);
         }
     }
@@ -725,7 +750,9 @@ static void show_draw(float dt)
     font_draw_fit(f_hero, 92, 60, sh->name, TEXT, SCREEN_W - 106);
     char buf[160], note[32];
     int n = season_total(show_open);
-    snprintf(buf, sizeof(buf), "%d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
+    char yr[16] = "";
+    if (sh->year) snprintf(yr, sizeof(yr), "%d \xC2\xB7 ", sh->year);
+    snprintf(buf, sizeof(buf), "%s%d season%s \xC2\xB7 %d episode%s \xC2\xB7 %d watched", yr, n, n == 1 ? "" : "s", sh->count, sh->count == 1 ? "" : "s", sh->watched);
     font_draw_fit(f_small, 92, 76, buf, MUTED, SCREEN_W - 106);
     if (season_count > 1) {
         float x = 92;
@@ -810,7 +837,15 @@ static void draw_grid(float dt)
         ui_round_corners(x, y, tw, th, 6, BG);
         split_name(v->title, artist, sizeof(artist), song, sizeof(song));
         font_draw_fit(f_tiny, x, y + th + 12, song, on ? TEXT : MUTED, tw);
-        if (*artist) font_draw_fit(f_chip, x, y + th + 23, artist, DIM, tw);
+        // The year at the right of the artist line, so a long name can't push it off.
+        float yw = 0;
+        if (v->year) {
+            char yr[8];
+            snprintf(yr, sizeof(yr), "%d", v->year);
+            yw = font_width(f_chip, yr, 0) + 6;
+            font_draw_right(f_chip, x + tw, y + th + 23, yr, DIM);
+        }
+        if (*artist) font_draw_fit(f_chip, x, y + th + 23, artist, DIM, tw - yw);
     }
     gfx_unclip();
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
