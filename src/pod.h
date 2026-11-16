@@ -5,6 +5,7 @@
 #include "sys.h"
 
 void pod_enter(void);
+void pod_enter_now(void); // straight to now playing when a song is loaded
 // Returns a MUSIC_* action.
 int pod_update(const Input *in, float dt);
 void pod_draw(float dt);

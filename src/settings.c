@@ -11,11 +11,12 @@
 #include "ui.h"
 #include "version.h"
 
-Settings settings = { THEME_FLAC, DECK_AMBER, 1, 1, 1, DELAY_1M, 0, 1, FIT_FIT };
+Settings settings = { THEME_FLAC, DECK_AMBER, 1, 1, 1, DELAY_1M, 0, 1, FIT_FIT, HOME_STREAM };
 const char *const fit_names[FIT_COUNT] = { "Fit", "Zoom", "Stretch" };
 const char *const theme_names[THEME_COUNT] = { "FL/AC", "iPod", "Head unit" };
 const char *const deck_color_names[DECK_COLORS] = { "Ice blue", "Amber", "Green", "Red", "White", "Purple", "Gradient" };
 
+const char *const home_style_names[HOME_STYLES] = { "Stream", "Web" };
 static const char *const delay_names[DELAY_COUNT] = { "15 sec", "30 sec", "1 min", "2 min" };
 #define VIS_STYLES 6
 static const char *const vis_names[VIS_STYLES] = {
@@ -52,6 +53,7 @@ void settings_load(const char *data_dir)
         else if (sscanf(line, "vis_style=%d", &v) == 1) settings.vis_style = clampi(v, 0, VIS_STYLES - 1);
         else if (sscanf(line, "resume_videos=%d", &v) == 1) settings.resume_videos = v != 0;
         else if (sscanf(line, "video_fit=%d", &v) == 1) settings.video_fit = clampi(v, 0, FIT_COUNT - 1);
+        else if (sscanf(line, "home_style=%d", &v) == 1) settings.home_style = clampi(v, 0, HOME_STYLES - 1);
     }
 }
 
@@ -59,9 +61,10 @@ void settings_save(void)
 {
     char buf[256], dir[300];
     int n = snprintf(buf, sizeof(buf),
-                     "theme=%d\ndeck_color=%d\ndeck_speed=%d\nkeep_on=%d\nidle_vis=%d\nidle_delay=%d\nvis_style=%d\nresume_videos=%d\nvideo_fit=%d\n",
+                     "theme=%d\ndeck_color=%d\ndeck_speed=%d\nkeep_on=%d\nidle_vis=%d\nidle_delay=%d\nvis_style=%d\nresume_videos=%d\nvideo_fit=%d\nhome_style=%d\n",
                      settings.theme, settings.deck_color, settings.deck_speed, settings.keep_on, settings.idle_vis,
-                     settings.idle_delay, settings.vis_style, settings.resume_videos, settings.video_fit);
+                     settings.idle_delay, settings.vis_style, settings.resume_videos, settings.video_fit,
+                     settings.home_style);
     snprintf(dir, sizeof(dir), "%s", path);
     char *slash = strrchr(dir, '/');
     if (slash) { *slash = 0; sceIoMkdir(dir, 0777); }
@@ -104,12 +107,13 @@ void settings_frame(float dt)
 #define ACCENT HEX(0x6C8CFF, 255)
 #define TRACK HEX(0x3A3D48, 255)
 
-enum { ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_FIT, ROW_SLEEP, ROW_PLUGINS, ROW_ABOUT, ROW_COUNT };
+enum { ROW_HOME, ROW_KEEP_ON, ROW_IDLE, ROW_DELAY, ROW_STYLE, ROW_THEME, ROW_DECK_COLOR, ROW_RESUME, ROW_FIT, ROW_SLEEP, ROW_PLUGINS, ROW_ABOUT, ROW_COUNT };
 static const char *const labels[ROW_COUNT] = {
-    "Keep screen on", "Idle visualizer", "Visualizer starts after", "Visualizer style",
+    "Home style", "Keep screen on", "Idle visualizer", "Visualizer starts after", "Visualizer style",
     "Music theme", "Head unit color", "Resume videos", "Video picture", "Sleep timer", "Plugins", "About Boro",
 };
 static const char *const helps[ROW_COUNT] = {
+    "Stream: big art up top. Web: an early-internet page.",
     "Screen stays lit while music plays. Off saves battery.", "Kicks in when no buttons are pressed", NULL, NULL,
     NULL, NULL, "Pick up where you stopped", "How videos fill the screen. SELECT changes it while watching.", "Fades the music out, then pauses it", "Better Bright, Status, Hold+ and Snap", NULL,
 };
@@ -146,6 +150,7 @@ static void change(int dir)
 {
     int *t = toggle_of(sel);
     if (t) *t = !*t;
+    else if (sel == ROW_HOME) settings.home_style = wrap(settings.home_style + dir, HOME_STYLES);
     else if (sel == ROW_DELAY) settings.idle_delay = wrap(settings.idle_delay + dir, DELAY_COUNT);
     else if (sel == ROW_STYLE) settings.vis_style = wrap(settings.vis_style + dir, VIS_STYLES);
     else if (sel == ROW_THEME) settings.theme = wrap(settings.theme + dir, THEME_COUNT);
@@ -202,6 +207,7 @@ int settings_update(const Input *in, float dt)
 static void value_of(int row, char *out, int size)
 {
     switch (row) {
+    case ROW_HOME: snprintf(out, size, "%s", home_style_names[settings.home_style]); break;
     case ROW_DELAY: snprintf(out, size, "%s", delay_names[settings.idle_delay]); break;
     case ROW_STYLE: snprintf(out, size, "%s", vis_names[settings.vis_style]); break;
     case ROW_THEME: snprintf(out, size, "%s", theme_names[settings.theme]); break;

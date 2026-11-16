@@ -46,6 +46,13 @@ static void music_enter(void)
     else flac_enter();
 }
 
+static void music_enter_now(void)
+{
+    if (settings.theme == THEME_DECK) deck_enter();
+    else if (settings.theme == THEME_POD) pod_enter_now();
+    else flac_enter_now();
+}
+
 static int music_update(const Input *in, float dt)
 {
     if (settings.theme == THEME_DECK) return deck_update(in, dt);
@@ -193,6 +200,15 @@ int main(int argc, char *argv[])
             } else if (r == HOME_OPEN_MUSIC) {
                 mode = MODE_MUSIC;
                 music_enter();
+            } else if (r == HOME_NOW_PLAYING) {
+                mode = MODE_MUSIC;
+                music_enter_now();
+            } else if (r == HOME_RESUME_VIDEO) {
+                mode = MODE_VIDEO;
+                video_enter_resume();
+            } else if (r == HOME_PLAY_GAME) {
+                mode = MODE_GAMES;
+                games_play(glib_last_game());
             } else if (r == HOME_OPEN_VIDEO) {
                 mode = MODE_VIDEO;
                 video_enter();

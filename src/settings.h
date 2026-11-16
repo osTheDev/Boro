@@ -9,6 +9,7 @@ enum { DECK_ICE, DECK_AMBER, DECK_GREEN, DECK_RED, DECK_WHITE, DECK_PURPLE, DECK
 
 enum { DELAY_15S, DELAY_30S, DELAY_1M, DELAY_2M, DELAY_COUNT };
 enum { FIT_FIT, FIT_ZOOM, FIT_STRETCH, FIT_COUNT };
+enum { HOME_STREAM, HOME_WEB, HOME_STYLES };
 
 typedef struct {
     int theme;      // THEME_*
@@ -20,12 +21,14 @@ typedef struct {
     int vis_style;  // 0 rotates every scene, else one scene (1-based)
     int resume_videos;
     int video_fit;  // FIT_*, for videos without their own choice
+    int home_style; // HOME_*
 } Settings;
 
 extern Settings settings;
 extern const char *const theme_names[THEME_COUNT];
 extern const char *const deck_color_names[DECK_COLORS];
 extern const char *const fit_names[FIT_COUNT];
+extern const char *const home_style_names[HOME_STYLES];
 
 void settings_load(const char *data_dir);
 void settings_save(void);

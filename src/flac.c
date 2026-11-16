@@ -420,3 +420,9 @@ void flac_draw(float dt)
     ui_volume(F(700, 10), HEX(0x282828, 245), HEX(0x535353, 255), ACCENT, WHITE);
     gfx_end();
 }
+
+void flac_enter_now(void)
+{
+    flac_enter();
+    if (player_song() >= 0) push(VIEW_NOW);
+}

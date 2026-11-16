@@ -5,6 +5,7 @@
 #include "sys.h"
 
 void video_enter(void);
+void video_enter_resume(void); // plays the video stopped partway, if any
 // Returns 1 when the user backs out to home.
 int video_update(const Input *in, float dt);
 void video_save(void); // remembers where the video playing is

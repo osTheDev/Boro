@@ -1,4 +1,4 @@
-# Sora, Manrope, Archivo, Silkscreen and VT323 font files (SIL OFL 1.1, see res/fonts/OFL-*.txt) embedded in the EBOOT.
+# Sora, Manrope, Archivo, Silkscreen, VT323 and Liberation Serif font files (SIL OFL 1.1, see res/fonts/OFL-*.txt) embedded in the EBOOT.
 	.section .rodata
 	.balign 4
 	.global sora400_ttf, sora400_ttf_end
@@ -60,3 +60,13 @@ silkscreen700_ttf_end:
 vt323_ttf:
 	.incbin "res/fonts/VT323-400.ttf"
 vt323_ttf_end:
+	.balign 4
+	.global serif400_ttf, serif400_ttf_end
+serif400_ttf:
+	.incbin "res/fonts/LiberationSerif-400.ttf"
+serif400_ttf_end:
+	.balign 4
+	.global serif700_ttf, serif700_ttf_end
+serif700_ttf:
+	.incbin "res/fonts/LiberationSerif-700.ttf"
+serif700_ttf_end:

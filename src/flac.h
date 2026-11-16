@@ -5,6 +5,7 @@
 #include "sys.h"
 
 void flac_enter(void);
+void flac_enter_now(void); // straight to now playing when a song is loaded
 // Returns 1 when the user backs out to the Boro home screen.
 int flac_update(const Input *in, float dt);
 void flac_draw(float dt);
