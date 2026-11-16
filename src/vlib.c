@@ -279,6 +279,38 @@ const Texture *vlib_show_poster(int show)
     return poster(stems, 4);
 }
 
+// The picture file behind a video's poster: the show's cover for an episode,
+// else <video name>.jpg/png beside it. 1 if found.
+static int find_image(const char *stem, char *out, int size)
+{
+    static const char *const ext[] = { ".jpg", ".jpeg", ".png", ".JPG", ".PNG" };
+    for (int e = 0; e < 5; e++) {
+        snprintf(out, size, "%s%s", stem, ext[e]);
+        SceIoStat st;
+        if (sceIoGetstat(out, &st) >= 0) return 1;
+    }
+    return 0;
+}
+
+int vlib_poster_file(int index, char *out, int size)
+{
+    if (index < 0 || index >= video_count) return 0;
+    char stem[300];
+    int show = videos[index].show;
+    if (show >= 0 && show < show_count) {
+        static const char *const names[] = { "cover", "poster", "folder" };
+        for (int i = 0; i < 3; i++) {
+            snprintf(stem, sizeof(stem), "%s/%s", shows[show].dir, names[i]);
+            if (find_image(stem, out, size)) return 1;
+        }
+        if (find_image(shows[show].dir, out, size)) return 1;
+    }
+    snprintf(stem, sizeof(stem), "%s", videos[index].path);
+    char *dot = strrchr(stem, '.');
+    if (dot) *dot = 0;
+    return find_image(stem, out, size);
+}
+
 const Texture *vlib_video_poster(int index)
 {
     if (index < 0 || index >= video_count) return NULL;

@@ -1,6 +1,7 @@
 // Listening stats: every stretch of listening is logged to data/stats.log,
 // and the Stats page and home glance bar sum it up by week, month or all
-// time. Radio-only songs count toward listening time and radio stations but
+// time. Audiobook time is logged too ("book:<folder>") and kept apart from
+// music. Radio-only songs count toward listening time and radio stations but
 // never toward plays or top songs, artists and albums.
 #ifndef BORO_STATS_H
 #define BORO_STATS_H
@@ -14,7 +15,11 @@ enum { TOP_SONGS, TOP_ARTISTS, TOP_ALBUMS, TOP_KINDS };
 #define TOP_MAX 5
 
 typedef struct {
-    u32 ms;                 // listening time, radio included
+    u32 ms;                 // music listening time, radio included
+    u32 book_ms;            // audiobook listening time
+    int top_book[TOP_MAX];  // into the logged book folders
+    u32 top_book_ms[TOP_MAX];
+    int top_book_count;
     int plays, prev_plays;  // prev_plays: the period before, -1 for all time
     int streak;             // days in a row with listening, up to today
     int bar_count;

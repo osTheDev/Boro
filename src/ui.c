@@ -15,6 +15,7 @@ extern const char archivo400_ttf[], archivo400_ttf_end[], archivo600_ttf[], arch
 extern const char archivo700_ttf[], archivo700_ttf_end[];
 extern const char silkscreen400_ttf[], silkscreen400_ttf_end[], silkscreen700_ttf[], silkscreen700_ttf_end[];
 extern const char vt323_ttf[], vt323_ttf_end[];
+extern const char serif400_ttf[], serif400_ttf_end[], serif700_ttf[], serif700_ttf_end[];
 
 #define MAX_FONTS 64
 #define MAX_RADIUS 80
@@ -48,6 +49,9 @@ Font *ui_font(int family, int weight, int px)
     } else if (family == FAMILY_SILKSCREEN) {
         data = weight >= 700 ? silkscreen700_ttf : silkscreen400_ttf;
         end = weight >= 700 ? silkscreen700_ttf_end : silkscreen400_ttf_end;
+    } else if (family == FAMILY_SERIF) {
+        data = weight >= 700 ? serif700_ttf : serif400_ttf;
+        end = weight >= 700 ? serif700_ttf_end : serif400_ttf_end;
     } else {
         data = vt323_ttf;
         end = vt323_ttf_end;

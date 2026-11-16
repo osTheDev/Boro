@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "library.h"
+#include "m4b.h"
+#include <pspaudiocodec.h>
+#include <malloc.h>
 
 #define RING 32768 // stereo frames buffered ahead (~0.7 s at 44.1 kHz)
 #define BLOCK 1024 // frames per hardware output call
@@ -37,6 +40,14 @@ static volatile int paused, shuffle, locked;
 static volatile int seek_to = -1; // ms into the current song, with flush_to
 static volatile float gain = 1.0f; // the sleep timer fades this out
 
+static BookTrack book[BOOK_TRACKS_MAX];
+static int source_kind;
+static char source_name[128];
+static volatile int book_mode;
+
+static volatile float speed = 1.0f; // books only; changed through a flush
+static float eff_speed(void) { return book_mode ? speed : 1.0f; }
+
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
 
@@ -53,7 +64,65 @@ typedef struct {
     u32 offset; // frames skipped by a seek
     int errors; // bad frames so far, tolerated after a seek
     u32 total;  // remaining when decoding started
+    int aac;    // reading an M4B through the AAC decoder
 } Track;
+
+static void stretch_reset(void);
+
+// ---- AAC (M4B audiobooks) ------------------------------------------------------
+// The open book file stays open between its chapters.
+
+static M4b *m4b;
+static char m4b_path[256];
+static unsigned long codec[65] __attribute__((aligned(64)));
+static void *codec_work;
+static int codec_rate;
+static u8 aac_src[8192 + 64] __attribute__((aligned(64)));
+
+static void aac_release(void)
+{
+    if (codec_rate) sceAudiocodecReleaseEDRAM(codec);
+    codec_rate = 0;
+}
+
+static int aac_init(int rate)
+{
+    if (codec_rate == rate) return 0;
+    aac_release();
+    memset(codec, 0, sizeof(codec));
+    if (sceAudiocodecCheckNeedMem(codec, PSP_CODEC_AAC) < 0 || !codec[4]) return -1;
+    if (!codec_work) codec_work = memalign(64, codec[4] < 0x10000 ? 0x10000 : codec[4]);
+    if (!codec_work) return -1;
+    codec[3] = (unsigned long)codec_work;
+    codec[10] = rate;
+    if (sceAudiocodecInit(codec, PSP_CODEC_AAC) < 0) return -1;
+    codec_rate = rate;
+    return 0;
+}
+
+static int open_aac(Track *t, const BookTrack *b, u32 start_ms)
+{
+    if (!m4b || strcmp(m4b_path, b->path)) {
+        m4b_close(m4b);
+        m4b = m4b_open(b->path);
+        snprintf(m4b_path, sizeof(m4b_path), "%s", m4b ? b->path : "");
+    }
+    if (!m4b || aac_init(m4b_rate(m4b)) < 0) return -1;
+    int rate = m4b_rate(m4b);
+    u32 want = b->start_ms + start_ms;
+    // Start a frame early: AAC needs the frame before to decode cleanly.
+    u32 at = m4b_seek(m4b, want);
+    if (at > 0) at = m4b_seek(m4b, at - 1);
+    t->aac = 1;
+    t->rate = rate;
+    t->handle = t->fd = -1;
+    t->errors = 0;
+    t->offset = (u32)((u64)start_ms * rate / 1000);
+    t->skip = (u32)((u64)(want - at) * rate / 1000);
+    t->remaining = b->end_ms > want ? (u32)((u64)(b->end_ms - want) * rate / 1000) : 0;
+    t->total = t->remaining;
+    return t->remaining ? 0 : -1;
+}
 
 static int feed(Track *t)
 {
@@ -69,12 +138,33 @@ static int feed(Track *t)
 
 static void close_track(Track *t)
 {
+    t->aac = 0;
     if (t->handle >= 0) sceMp3ReleaseMp3Handle(t->handle);
     if (t->fd >= 0) sceIoClose(t->fd);
     t->handle = t->fd = -1;
 }
 
 static int song_rate(const Song *s) { return s->sample_rate > 0 ? s->sample_rate : 44100; }
+
+// Book tracks are read through a Song with the same stream fields.
+static const Song *track_song(int id, const char **path)
+{
+    static Song tmp;
+    if (!book_mode) {
+        if (path) *path = song_path(&lib.songs[id]);
+        return &lib.songs[id];
+    }
+    const BookTrack *b = &book[id];
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.audio_start = b->audio_start;
+    tmp.audio_end = b->audio_end;
+    tmp.duration_ms = b->duration_ms;
+    tmp.total_samples = b->total_samples;
+    tmp.enc_delay = b->enc_delay;
+    tmp.sample_rate = b->sample_rate;
+    if (path) *path = b->path;
+    return &tmp;
+}
 
 // Length in bytes of the Layer III frame whose header starts at h, or 0 when
 // h isn't a header for the given sample rate.
@@ -112,10 +202,14 @@ static u32 find_frame(SceUID fd, u32 pos, int rate)
 
 static int open_track(Track *t, int song, u32 start_ms)
 {
-    const Song *s = &lib.songs[song];
+    t->aac = 0;
+    stretch_reset();
+    if (book_mode && book[song].kind == BOOK_M4B) return open_aac(t, &book[song], start_ms);
+    const char *path;
+    const Song *s = track_song(song, &path);
     t->handle = -1;
     t->offset = 0;
-    t->fd = sceIoOpen(song_path(s), PSP_O_RDONLY, 0);
+    t->fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (t->fd < 0) return -1;
     u32 start = s->audio_start;
     if (start_ms && s->duration_ms && start_ms < s->duration_ms) {
@@ -152,17 +246,111 @@ static int open_track(Track *t, int song, u32 start_ms)
     return 0;
 }
 
+static void ring_write(const s16 *pcm, u32 frames)
+{
+    take();
+    for (u32 i = 0; i < frames; i++) {
+        u32 at = (wr + i) % RING;
+        ring[at * 2] = pcm[i * 2];
+        ring[at * 2 + 1] = pcm[i * 2 + 1];
+    }
+    wr += frames;
+    give();
+}
+
+// ---- Speed for books: time-stretching that keeps the pitch ---------------------
+// WSOLA: the input is read in steps of hop * speed, each step's piece placed
+// where it lines up best with the natural continuation of the last one
+// (searched within +-hop/4), then crossfaded in. Output steps are hop frames.
+
+#define ST_HOP 1024
+#define ST_IN 16384
+static s16 st_in[ST_IN * 2];
+static s16 st_tail[ST_HOP * 2], st_out[ST_HOP * 2];
+static int st_n, st_have_tail;
+static float st_pos;
+
+static void stretch_reset(void)
+{
+    st_n = 0;
+    st_have_tail = 0;
+    st_pos = ST_HOP / 4;
+}
+
+static void stretch_push(const s16 *pcm, u32 frames, int rate)
+{
+    int hop = rate >= 32000 ? ST_HOP : ST_HOP / 2, reach = hop / 4;
+    while (frames) {
+        u32 room = (u32)(ST_IN - st_n), n = room < frames ? room : frames;
+        memcpy(st_in + st_n * 2, pcm, n * 4);
+        st_n += n;
+        pcm += n * 2;
+        frames -= n;
+        for (;;) {
+            int p = (int)st_pos;
+            if (p + reach + 2 * hop > st_n) break;
+            int best = 0;
+            if (st_have_tail) {
+                // Best lineup, compared on every 4th frame, mixed to mono.
+                s64 best_c = -((s64)1 << 62);
+                for (int d = -reach; d <= reach; d += 2) {
+                    const s16 *a = st_tail, *b = st_in + (p + d) * 2;
+                    s64 c = 0;
+                    for (int i = 0; i < hop; i += 4)
+                        c += (s64)(a[i * 2] + a[i * 2 + 1]) * (b[i * 2] + b[i * 2 + 1]);
+                    if (c > best_c) { best_c = c; best = d; }
+                }
+            }
+            const s16 *seg = st_in + (p + best) * 2;
+            if (st_have_tail) {
+                for (int i = 0; i < hop; i++)
+                    for (int c = 0; c < 2; c++)
+                        st_out[i * 2 + c] = (s16)((st_tail[i * 2 + c] * (hop - i) + seg[i * 2 + c] * i) / hop);
+                ring_write(st_out, hop);
+            } else {
+                ring_write(seg, hop);
+            }
+            memcpy(st_tail, seg + hop * 2, hop * 4);
+            st_have_tail = 1;
+            st_pos += hop * speed;
+            // Drop what's behind us.
+            int drop = (int)st_pos - reach;
+            if (drop > ST_IN / 2) {
+                memmove(st_in, st_in + drop * 2, (st_n - drop) * 4);
+                st_n -= drop;
+                st_pos -= drop;
+            }
+        }
+        if (n == 0) { st_n = 0; st_pos = reach; } // full and stuck: start over
+    }
+}
+
 // Decodes one MP3 frame into the ring. Returns 0 at the end of the track.
 static int decode_frame(Track *t)
 {
-    if (sceMp3CheckStreamDataNeeded(t->handle) > 0 && feed(t) < 0) return 0;
     SceShort16 *pcm;
-    int bytes = sceMp3Decode(t->handle, &pcm);
+    int bytes;
+    if (t->aac) {
+        int n = m4b_next(m4b, aac_src, sizeof(aac_src) - 64);
+        if (n <= 0) return 0;
+        sceKernelDcacheWritebackRange(aac_src, n);
+        codec[6] = (unsigned long)aac_src;
+        codec[7] = n;
+        codec[8] = (unsigned long)pcm_buf;
+        codec[9] = 1024 * 4;
+        // A bad frame plays as silence rather than ending the chapter.
+        if (sceAudiocodecDecode(codec, PSP_CODEC_AAC) < 0) memset(pcm_buf, 0, 1024 * 4);
+        pcm = pcm_buf;
+        bytes = 1024 * 4;
+    } else {
+    if (sceMp3CheckStreamDataNeeded(t->handle) > 0 && feed(t) < 0) return 0;
+    bytes = sceMp3Decode(t->handle, &pcm);
     // After a seek the first frames can lean on data before the cut and fail
     // to decode: skip those rather than ending the song.
     if (bytes < 0 && t->offset && ++t->errors < 32) return 1;
     if (bytes == 0 && t->offset && t->remaining == t->total && ++t->errors < 32) return 1;
     if (bytes <= 0) return 0;
+    }
     // The Media Engine writes the PCM straight to memory: drop any stale
     // cached copy before the CPU reads it.
     sceKernelDcacheInvalidateRange(pcm_buf, sizeof(pcm_buf));
@@ -176,14 +364,8 @@ static int decode_frame(Track *t)
     if (frames > t->remaining) frames = t->remaining;
     t->remaining -= frames;
 
-    take();
-    for (u32 i = 0; i < frames; i++) {
-        u32 at = (wr + i) % RING;
-        ring[at * 2] = pcm[i * 2];
-        ring[at * 2 + 1] = pcm[i * 2 + 1];
-    }
-    wr += frames;
-    give();
+    if (eff_speed() != 1.0f) stretch_push(pcm, frames, t->rate);
+    else ring_write(pcm, frames);
     return t->remaining > 0;
 }
 
@@ -210,7 +392,7 @@ static void extend_radio(void)
 static int decoder_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    Track t = { -1, -1, 0, 0, 0, 0, 0, 0 };
+    Track t = { -1, -1, 0, 0, 0, 0, 0, 0, 0 };
     int open = 0;
     u32 start_ms = 0;
     for (;;) {
@@ -225,7 +407,7 @@ static int decoder_thread(SceSize args, void *argp)
             start_ms = seek_to > 0 ? seek_to : 0;
             seek_to = -1;
             cur_start = 0;
-            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(&lib.songs[order[cur_index]]) / 1000);
+            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(track_song(order[cur_index], NULL)) / 1000 / eff_speed());
             flush_to = -1;
             give();
         }
@@ -256,7 +438,7 @@ static int decoder_thread(SceSize args, void *argp)
             open = 1;
             take();
             if (mark_count == MARKS) memmove(marks, marks + 1, --mark_count * sizeof(Marker));
-            marks[mark_count++] = (Marker){ wr, index, t.rate, t.offset };
+            marks[mark_count++] = (Marker){ wr, index, t.rate, (u32)(t.offset / eff_speed()) };
             give();
         }
         take();
@@ -377,10 +559,21 @@ static void shuffle_from(int first)
     }
 }
 
+static void stop_decoder(void)
+{
+    take();
+    flush_to = count;
+    cur_index = -1;
+    give();
+    while (flush_to >= 0) sceKernelDelayThread(2000);
+}
+
 void player_play(const int *songs, int n, int start, int shuf)
 {
     if (n <= 0) return;
+    if (book_mode) stop_decoder(); // it may be reading a book track
     take();
+    book_mode = 0;
     free(order);
     free(list);
     order = malloc(n * sizeof(int));
@@ -403,8 +596,6 @@ void player_play(const int *songs, int n, int start, int shuf)
     give();
 }
 
-static int source_kind;
-static char source_name[128];
 
 void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle)
 {
@@ -525,7 +716,43 @@ int player_index(int *total)
 int player_song(void)
 {
     int i = cur_index;
-    return i >= 0 && i < count ? order[i] : -1;
+    return !book_mode && i >= 0 && i < count ? order[i] : -1;
+}
+
+int player_book_track(void)
+{
+    int i = cur_index;
+    return book_mode && i >= 0 && i < count ? order[i] : -1;
+}
+
+int player_active(void)
+{
+    int i = cur_index;
+    return i >= 0 && i < count;
+}
+
+void player_play_book(const BookTrack *tracks, int n, int start, u32 start_ms)
+{
+    if (n <= 0) return;
+    if (n > BOOK_TRACKS_MAX) n = BOOK_TRACKS_MAX;
+    stop_decoder(); // the old list must be out of use before it changes
+    take();
+    memcpy(book, tracks, n * sizeof(BookTrack));
+    book_mode = 1;
+    free(order);
+    free(list);
+    order = malloc(n * sizeof(int));
+    list = malloc(n * sizeof(int));
+    for (int i = 0; i < n; i++) order[i] = list[i] = i;
+    count = list_count = n;
+    shuffle = locked = 0;
+    source_kind = FROM_BOOK;
+    if (start < 0 || start >= n) start = 0;
+    paused = 0;
+    seek_to = start_ms ? (int)start_ms : -1;
+    flush_to = start;
+    cur_index = start;
+    give();
 }
 int player_paused(void) { return paused; }
 int player_shuffle(void) { return shuffle; }
@@ -535,5 +762,22 @@ u32 player_position_ms(void)
 {
     if (cur_index < 0 || flush_to >= 0) return 0;
     u32 played = rd - cur_start;
-    return (u32)((u64)played * 1000 / (cur_rate ? cur_rate : 44100));
+    return (u32)((u64)played * 1000 / (cur_rate ? cur_rate : 44100) * eff_speed());
+}
+
+float player_speed(void) { return speed; }
+
+void player_set_speed(float s)
+{
+    if (s < 0.5f) s = 0.5f;
+    if (s > 2.0f) s = 2.0f;
+    if (s == speed) return;
+    if (!book_mode || cur_index < 0) { speed = s; return; }
+    // Restart from where we are, so positions stay right at the new speed.
+    u32 at = player_position_ms();
+    take();
+    speed = s;
+    seek_to = at;
+    flush_to = cur_index;
+    give();
 }

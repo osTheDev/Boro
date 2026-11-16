@@ -617,3 +617,9 @@ void pod_draw(float dt)
     ui_volume(A(700, 10), HEX(0xF4F5F7, 245), DIVIDER, HL, TEXT);
     gfx_end();
 }
+
+void pod_enter_now(void)
+{
+    pod_enter();
+    if (player_song() >= 0) now_open = 1;
+}

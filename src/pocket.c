@@ -29,7 +29,7 @@ static float card_t, card_k, pill_t;
 static int had_headphones = -1;
 static u32 last_keys;
 
-static int music_playing(void) { return player_song() >= 0 && !player_paused(); }
+static int music_playing(void) { return player_active() && !player_paused(); }
 
 static void screen_power(int on)
 {
@@ -48,7 +48,7 @@ static void remote(void)
     sceHprmPeekCurrentKey(&keys);
     u32 down = keys & ~last_keys;
     last_keys = keys;
-    if (player_song() < 0) return;
+    if (!player_active()) return;
     if (down & PSP_HPRM_PLAYPAUSE) player_toggle_pause();
     if (!player_locked()) { // radio doesn't skip
         if (down & PSP_HPRM_FORWARD) player_next();

@@ -9,12 +9,32 @@
 
 void player_init(void);
 
+// Audiobooks play through the same decoder, from their own track list rather
+// than the music library. While a book plays, player_song() is -1 so the
+// music screens show nothing playing; player_book_track() says where it is.
+enum { BOOK_MP3, BOOK_M4B };
+typedef struct {
+    char path[256];
+    int kind;                 // BOOK_*
+    u32 audio_start, audio_end, duration_ms, total_samples; // MP3
+    s32 enc_delay, sample_rate;
+    u32 start_ms, end_ms;     // M4B: the chapter's span in the file
+} BookTrack;
+#define BOOK_TRACKS_MAX 512
+// Plays tracks[start] from start_ms, then the rest in order.
+void player_play_book(const BookTrack *tracks, int count, int start, u32 start_ms);
+int player_book_track(void); // index into the book's tracks, or -1 when no book is loaded
+int player_active(void);     // something (music or a book) is loaded
+// Book playback speed, 0.5..2, keeping the voice's pitch. Music always plays at 1.
+void player_set_speed(float s);
+float player_speed(void);
+
 // Plays songs[start], then the rest of the list. With shuffle, the list is
 // shuffled with songs[start] first.
 void player_play(const int *songs, int count, int start, int shuffle);
 
 // Where playback was started from, shown by every theme's now playing.
-enum { FROM_ALBUM, FROM_ARTIST, FROM_SONGS, FROM_PLAYLIST, FROM_RADIO };
+enum { FROM_ALBUM, FROM_ARTIST, FROM_SONGS, FROM_PLAYLIST, FROM_RADIO, FROM_BOOK };
 void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle);
 const char *player_source(int *kind); // the name, like "Night Drive" or "Nova Lane Radio"
 void player_toggle_pause(void);

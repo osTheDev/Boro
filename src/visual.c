@@ -422,3 +422,9 @@ void visual_draw(float dt)
     ui_volume(ui_font(FAMILY_VT323, 400, 22), bg, L[3], fg, fg);
     gfx_end();
 }
+
+void visual_bands(float *out, int n, float dt)
+{
+    analyze(dt);
+    for (int i = 0; i < n; i++) out[i] = band(i * BANDS / n);
+}

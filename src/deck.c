@@ -741,3 +741,5 @@ void deck_draw(float dt)
     ui_volume(V(22), BG, FAINT, FG, FG);
     gfx_end();
 }
+
+void deck_colors(u32 *fg, u32 *bg) { colors_for(settings.deck_color, hue, fg, bg); }

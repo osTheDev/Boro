@@ -1054,3 +1054,10 @@ void video_draw(float dt)
     if (playing >= 0) player_draw();
     else browser_draw(dt);
 }
+
+void video_enter_resume(void)
+{
+    video_enter();
+    int c = vlib_continue();
+    if (c >= 0) start(c, resume_of(&videos[c]));
+}

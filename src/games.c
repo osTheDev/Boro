@@ -858,3 +858,11 @@ void games_draw(float dt)
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }
+
+void games_play(int index)
+{
+    games_enter();
+    if (index < 0 || index >= game_count) return;
+    open_page(index);
+    launch(index);
+}
