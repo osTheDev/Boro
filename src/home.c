@@ -658,11 +658,13 @@ static void stream_tiles(void)
 static void stream_stats(void)
 {
     refresh_week();
-    char all[24], music[24], game[24], line[160];
-    stats_format_time(all, sizeof(all), week.ms + gweek.seconds * 1000);
+    char all[24], music[24], game[24], book[24], line[160];
+    stats_format_time(all, sizeof(all), week.ms + week.book_ms + gweek.seconds * 1000);
     stats_format_time(music, sizeof(music), week.ms);
     stats_format_time(game, sizeof(game), gweek.seconds * 1000);
-    snprintf(line, sizeof(line), "This week %s \xC2\xB7 Music %s \xC2\xB7 Games %s", all, music, game);
+    stats_format_time(book, sizeof(book), week.book_ms);
+    if (week.book_ms) snprintf(line, sizeof(line), "This week %s \xC2\xB7 Music %s \xC2\xB7 Games %s \xC2\xB7 Books %s", all, music, game, book);
+    else snprintf(line, sizeof(line), "This week %s \xC2\xB7 Music %s \xC2\xB7 Games %s", all, music, game);
     float k = sel_k[SEL_STATS], y = 248;
     if (k > 0.01f) gfx_nine(t_fill8, 8, PAD - 6, y - 12, SCREEN_W - 2 * PAD + 12, 17, color_alpha(ACCENT, 0.18f * k));
     font_draw_fit(f_tiny, PAD, y, line, color_lerp(MUTED, TEXT, k), 360);
@@ -810,10 +812,11 @@ static void web_draw(void)
     }
 
     // Hit counter: this week's time.
-    char all[24], music[24], game[24], line[160];
-    stats_format_time(all, sizeof(all), week.ms + gweek.seconds * 1000);
+    char all[24], music[24], game[24], book[24], line[160];
+    stats_format_time(all, sizeof(all), week.ms + week.book_ms + gweek.seconds * 1000);
     stats_format_time(music, sizeof(music), week.ms);
     stats_format_time(game, sizeof(game), gweek.seconds * 1000);
+    stats_format_time(book, sizeof(book), week.book_ms);
     int on = sel == SEL_STATS;
     float lw = font_width(f_sb, "This week on Boro:", 0);
     font_draw(f_sb, 24, 170, "This week on Boro:", on ? W_LINK : W_BLACK, 0);
@@ -827,8 +830,10 @@ static void web_draw(void)
         cx += 15;
     }
     if (on) font_draw(f_s, cx + 8, 170, "\xE2\x86\x90 click for Stats!", W_MAROON, 0);
-    snprintf(line, sizeof(line), "Music %s  \xC2\xB7  Games %s  \xC2\xB7  Top game: %s", music, game,
-             gweek.top_count ? gweek.top_title[0] : "\xE2\x80\x94");
+    if (week.book_ms) snprintf(line, sizeof(line), "Music %s  \xC2\xB7  Games %s  \xC2\xB7  Books %s  \xC2\xB7  Top game: %s", music, game, book,
+                               gweek.top_count ? gweek.top_title[0] : "\xE2\x80\x94");
+    else snprintf(line, sizeof(line), "Music %s  \xC2\xB7  Games %s  \xC2\xB7  Top game: %s", music, game,
+                  gweek.top_count ? gweek.top_title[0] : "\xE2\x80\x94");
     font_draw_fit(f_s, 24, 190, line, W_BLACK, 432);
 
     // Marquee.

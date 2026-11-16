@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "art.h"
+#include "blib.h"
 #include "library.h"
 #include "player.h"
 #include "ui.h"
@@ -20,17 +21,20 @@ typedef struct {
     u32 day, ms;
     s32 song;    // -1 when the file is gone from the library
     s16 station; // index into station_names, -1 when not radio
+    s16 book;    // index into book_names for audiobook time, else -1
 } Rec;
 
 static Rec *recs;
 static int rec_count, rec_cap;
 static char (*station_names)[64];
 static int station_name_count, station_name_cap;
+static char (*book_names)[256];
+static int book_name_count, book_name_cap;
 static char log_path[300];
 static int loaded;
 
 // The song being listened to now.
-static int cur_song = -1, cur_station = -1;
+static int cur_song = -1, cur_station = -1, cur_book = -1; // cur_book: into book_names
 static float cur_ms;
 
 // ---- Dates ---------------------------------------------------------------------
@@ -76,14 +80,28 @@ static int station_index(const char *name)
     return station_name_count++;
 }
 
-static void add(u32 day, u32 ms, int song, int station)
+static int book_index(const char *dir)
+{
+    for (int i = 0; i < book_name_count; i++)
+        if (!strcmp(book_names[i], dir)) return i;
+    if (book_name_count == book_name_cap) {
+        book_name_cap = book_name_cap ? book_name_cap * 2 : 16;
+        book_names = realloc(book_names, book_name_cap * sizeof(*book_names));
+    }
+    snprintf(book_names[book_name_count], 256, "%s", dir);
+    return book_name_count++;
+}
+
+static void add_rec(u32 day, u32 ms, int song, int station, int book)
 {
     if (rec_count == rec_cap) {
         rec_cap = rec_cap ? rec_cap * 2 : 256;
         recs = realloc(recs, rec_cap * sizeof(Rec));
     }
-    recs[rec_count++] = (Rec){ day, ms, song, (s16)station };
+    recs[rec_count++] = (Rec){ day, ms, song, (s16)station, (s16)book };
 }
+
+static void add(u32 day, u32 ms, int song, int station) { add_rec(day, ms, song, station, -1); }
 
 void stats_load(const char *data_dir)
 {
@@ -112,19 +130,27 @@ void stats_load(const char *data_dir)
             if (tab) { *tab = 0; p = tab + 1; }
         }
         if (k < 4) continue;
-        add(strtoul(f[0], NULL, 10), strtoul(f[1], NULL, 10), library_find_path(f[3]), f[2][0] ? station_index(f[2]) : -1);
+        // Audiobook time: "book:<book folder>" in place of the song.
+        if (!strncmp(f[3], "book:", 5)) add_rec(strtoul(f[0], NULL, 10), strtoul(f[1], NULL, 10), -1, -1, book_index(f[3] + 5));
+        else add(strtoul(f[0], NULL, 10), strtoul(f[1], NULL, 10), library_find_path(f[3]), f[2][0] ? station_index(f[2]) : -1);
     }
     free(buf);
 }
 
 void stats_flush(void)
 {
-    if (cur_song < 0 || cur_ms < 1000 || !loaded) { cur_ms = 0; return; }
+    if ((cur_song < 0 && cur_book < 0) || cur_ms < 1000 || !loaded) { cur_ms = 0; return; }
     u32 day = today(), ms = (u32)cur_ms;
-    add(day, ms, cur_song, cur_station);
     char line[512];
-    int n = snprintf(line, sizeof(line), "%u\t%u\t%s\t%s\n", (unsigned)day, (unsigned)ms,
+    int n;
+    if (cur_song < 0) {
+        add_rec(day, ms, -1, -1, cur_book);
+        n = snprintf(line, sizeof(line), "%u\t%u\t\tbook:%s\n", (unsigned)day, (unsigned)ms, book_names[cur_book]);
+    } else {
+        add(day, ms, cur_song, cur_station);
+        n = snprintf(line, sizeof(line), "%u\t%u\t%s\t%s\n", (unsigned)day, (unsigned)ms,
                      cur_station >= 0 ? station_names[cur_station] : "", song_path(&lib.songs[cur_song]));
+    }
     SceUID fd = sceIoOpen(log_path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
     if (fd >= 0) {
         sceIoWrite(fd, line, n < (int)sizeof(line) ? n : (int)sizeof(line) - 1);
@@ -137,16 +163,21 @@ void stats_frame(float dt)
 {
     if (!loaded) return;
     int song = player_song();
-    if (song != cur_song) {
+    int b = song < 0 && player_book_track() >= 0 ? blib_playing() : -1;
+    int book = b >= 0 && b < book_count ? (cur_book >= 0 && !strcmp(book_names[cur_book], books[b].dir) ? cur_book : book_index(books[b].dir)) : -1;
+    if (song != cur_song || book != cur_book) {
         stats_flush();
         cur_song = song;
+        cur_book = book;
         cur_station = -1;
         if (song >= 0 && player_locked()) {
             int kind;
             cur_station = station_index(player_source(&kind));
         }
     }
-    if (song >= 0 && !player_paused()) cur_ms += dt * 1000;
+    // A minute's worth logged now and then, so a long chapter isn't lost.
+    if ((song >= 0 || book >= 0) && !player_paused()) cur_ms += dt * 1000;
+    if (book >= 0 && cur_ms >= 60000) stats_flush();
 }
 
 // ---- Summing up ---------------------------------------------------------------
@@ -191,8 +222,8 @@ void stats_compute(int period, Stats *s)
     s->prev_plays = -1;
     u32 now = today();
     // The song in progress counts too, so the numbers move while it plays.
-    int live = cur_song >= 0 && cur_ms >= 1000;
-    if (live) add(now, (u32)cur_ms, cur_song, cur_station);
+    int live = (cur_song >= 0 || cur_book >= 0) && cur_ms >= 1000;
+    if (live) add_rec(now, (u32)cur_ms, cur_song, cur_station, cur_song >= 0 ? -1 : cur_book);
 
     u32 span = period == PERIOD_WEEK ? 7 : period == PERIOD_MONTH ? 28 : 0;
     u32 first = span && now >= span - 1 ? now - (span - 1) : 0;
@@ -200,6 +231,7 @@ void stats_compute(int period, Stats *s)
     u16 *counts = calloc(n_songs + lib.artist_count + lib.album_count + 3, sizeof(u16));
     u16 *artist_counts = counts + n_songs + 1, *album_counts = artist_counts + lib.artist_count + 1;
     u32 *station_ms = calloc(station_name_count + 1, sizeof(u32));
+    u32 *book_ms = calloc(book_name_count + 1, sizeof(u32));
 
     // Bars: days of the week, weeks of the month, or the last 7 months.
     static const char *wd = "TFSSMTW"; // 1970-01-01 was a Thursday
@@ -225,7 +257,8 @@ void stats_compute(int period, Stats *s)
         if (span && period != PERIOD_ALL && r->day + 2 * span > now && r->day < first && is_play(r) && !lib.songs[r->song].radio)
             s->prev_plays++;
         if (r->day < first || r->day > now) continue;
-        s->ms += r->ms;
+        if (r->book >= 0) { s->book_ms += r->ms; book_ms[r->book] += r->ms; }
+        else s->ms += r->ms;
         if (r->station >= 0) station_ms[r->station] += r->ms;
         if (period == PERIOD_WEEK) s->bars[r->day - first] += r->ms;
         else if (period == PERIOD_MONTH) s->bars[(r->day - first) / 7] += r->ms;
@@ -246,6 +279,20 @@ void stats_compute(int period, Stats *s)
     s->top_count[TOP_SONGS] = top_n(counts, n_songs, s->top[TOP_SONGS], s->top_plays[TOP_SONGS]);
     s->top_count[TOP_ARTISTS] = top_n(artist_counts, lib.artist_count, s->top[TOP_ARTISTS], s->top_plays[TOP_ARTISTS]);
     s->top_count[TOP_ALBUMS] = top_n(album_counts, lib.album_count, s->top[TOP_ALBUMS], s->top_plays[TOP_ALBUMS]);
+    // Top books by time listened.
+    for (int i = 0; i < book_name_count; i++) {
+        if (!book_ms[i]) continue;
+        int at = s->top_book_count;
+        while (at > 0 && s->top_book_ms[at - 1] < book_ms[i]) at--;
+        if (at >= TOP_MAX) continue;
+        int last = s->top_book_count < TOP_MAX ? s->top_book_count : TOP_MAX - 1;
+        memmove(s->top_book + at + 1, s->top_book + at, (last - at) * sizeof(int));
+        memmove(s->top_book_ms + at + 1, s->top_book_ms + at, (last - at) * sizeof(u32));
+        s->top_book[at] = i;
+        s->top_book_ms[at] = book_ms[i];
+        if (s->top_book_count < TOP_MAX) s->top_book_count++;
+    }
+    free(book_ms);
     for (int i = 0; i < station_name_count; i++)
         if (station_ms[i] > s->station_ms) {
             s->station_ms = station_ms[i];
@@ -299,9 +346,9 @@ int stats_update(const Input *in, float dt)
     int changed = 0;
     if (p & PSP_CTRL_LTRIGGER) { period = (period + PERIOD_COUNT - 1) % PERIOD_COUNT; changed = 1; }
     if (p & PSP_CTRL_RTRIGGER) { period = (period + 1) % PERIOD_COUNT; changed = 1; }
-    // The top list cycles tracks, artists, albums and then games.
-    if (p & PSP_CTRL_DOWN) top_kind = (top_kind + 1) % (TOP_KINDS + 1);
-    if (p & PSP_CTRL_UP) top_kind = (top_kind + TOP_KINDS) % (TOP_KINDS + 1);
+    // The top list cycles tracks, artists, albums, games and then books.
+    if (p & PSP_CTRL_DOWN) top_kind = (top_kind + 1) % (TOP_KINDS + 2);
+    if (p & PSP_CTRL_UP) top_kind = (top_kind + TOP_KINDS + 1) % (TOP_KINDS + 2);
     if ((p & PSP_CTRL_SQUARE) && player_song() >= 0) player_toggle_pause();
     refresh_t += dt;
     if (changed) grow = 0;
@@ -390,8 +437,12 @@ void stats_draw(float dt)
 
     // Key numbers.
     char v[4][48], note[4][48];
-    stats_format_time(v[0], sizeof(v[0]), st.ms);
-    snprintf(note[0], sizeof(note[0]), "Includes radio");
+    stats_format_time(v[0], sizeof(v[0]), st.ms + st.book_ms);
+    if (st.book_ms) {
+        char bt[24];
+        stats_format_time(bt, sizeof(bt), st.book_ms);
+        snprintf(note[0], sizeof(note[0]), "Books %s, radio too", bt);
+    } else snprintf(note[0], sizeof(note[0]), "Includes radio");
     snprintf(v[1], sizeof(v[1]), "%d", st.plays);
     if (st.prev_plays > 0) {
         int pct = (st.plays - st.prev_plays) * 100 / st.prev_plays;
@@ -452,10 +503,33 @@ void stats_draw(float dt)
     // Top songs, artists or albums.
     float tx = lx + lw + 10, ty = ly, th = lh + 38;
     card(tx, ty, lw, th);
-    static const char *top_titles[TOP_KINDS + 1] = { "Top tracks", "Top artists", "Top albums", "Top games" };
+    static const char *top_titles[TOP_KINDS + 2] = { "Top tracks", "Top artists", "Top albums", "Top games", "Top books" };
     font_draw(S(400, 9), tx + 8, ty + 13, top_titles[top_kind], LABEL, 0);
-    font_draw_right(S(400, 9), tx + lw - 8, ty + 13, top_kind == TOP_KINDS ? "Played" : "Plays", LABEL);
-    if (top_kind == TOP_KINDS) {
+    font_draw_right(S(400, 9), tx + lw - 8, ty + 13, top_kind == TOP_KINDS ? "Played" : top_kind > TOP_KINDS ? "Listened" : "Plays", LABEL);
+    if (top_kind == TOP_KINDS + 1) {
+        if (!st.top_book_count) font_draw(S(400, 10), tx + 8, ty + 40, "No books heard yet", MUTED, 0);
+        for (int i = 0; i < st.top_book_count; i++) {
+            float ry = ty + 20 + i * 25, rx = tx + 8, rw = lw - 16;
+            const char *dir = book_names[st.top_book[i]], *title = strrchr(dir, '/');
+            title = title ? title + 1 : dir;
+            int bi = -1;
+            for (int j = 0; j < book_count; j++) if (!strcmp(books[j].dir, dir)) { bi = j; title = books[j].title; break; }
+            char tm[24];
+            stats_format_time(tm, sizeof(tm), st.top_book_ms[i]);
+            font_draw(S(700, 9), rx, ry + 15, (char[2]){ (char)('1' + i), 0 }, i == 0 ? ACCENT : MUTED, 0);
+            const Texture *c = bi >= 0 && books[bi].cover[0] ? art_get_file(books[bi].cover, ART_COVER_S) : NULL;
+            if (c) {
+                float h = 22, w = h * c->w / (float)c->h;
+                if (w > 22) w = 22;
+                gfx_filter(1);
+                gfx_tex(c, rx + 12 + (22 - w) / 2, ry + 1, w, h, 0xFFFFFFFF);
+            } else ui_placeholder_art(rx + 12, ry + 2, 20, 3, i + 21);
+            Font *ft = S(700, 9);
+            float tw = font_width(ft, tm, 0);
+            font_draw_fit(S(600, 10), rx + 40, ry + 16, title, TEXT, rw - 46 - tw);
+            font_draw(ft, rx + rw - tw, ry + 16, tm, HEX(0xC9CBD4, 255), 0);
+        }
+    } else if (top_kind == TOP_KINDS) {
         GameStats gs;
         glib_stats(period == PERIOD_WEEK ? 7 : period == PERIOD_MONTH ? 28 : 0, &gs);
         if (!gs.top_count) font_draw(S(400, 10), tx + 8, ty + 40, "No games played yet", MUTED, 0);
@@ -478,7 +552,7 @@ void stats_draw(float dt)
     }
 
     // Hints.
-    static const char *next_names[TOP_KINDS + 1] = { "Artists", "Albums", "Games", "Tracks" };
+    static const char *next_names[TOP_KINDS + 2] = { "Artists", "Albums", "Games", "Books", "Tracks" };
     char down[32];
     snprintf(down, sizeof(down), "Down: %s", next_names[top_kind]);
     Font *fh = S(400, 9);
