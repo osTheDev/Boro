@@ -9,6 +9,7 @@
 #include "flac.h"
 #include "gfx.h"
 #include "games.h"
+#include "gcoll.h"
 #include "glib.h"
 #include "home.h"
 #include "library.h"
@@ -98,6 +99,7 @@ int main(int argc, char *argv[])
     vlib_init(data_dir, video_dir, picture_dir);
     plib_init(data_dir, picture_dir);
     glib_init(data_dir, app_dir);
+    gcoll_load(data_dir);
     home_init();
 
     u64 tick_res = sceRtcGetTickResolution(), last;
