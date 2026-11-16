@@ -157,14 +157,18 @@ int glib_last_game(void)
 
 // ---- Reading games ------------------------------------------------------------
 
+// Little-endian u32 from any address: ISO directory records put them at odd
+// offsets, and the PSP faults on unaligned word loads.
+static u32 rd32(const u8 *p) { return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24; }
+
 // PARAM.SFO: copies a string value (TITLE, DISC_ID, CATEGORY).
 static void sfo_get(const u8 *sfo, int size, const char *key, char *out, int out_size)
 {
     if (size < 20 || memcmp(sfo, "\0PSF", 4)) return;
-    u32 keys = *(u32 *)(sfo + 8), data = *(u32 *)(sfo + 12), n = *(u32 *)(sfo + 16);
+    u32 keys = rd32(sfo + 8), data = rd32(sfo + 12), n = rd32(sfo + 16);
     for (u32 i = 0; i < n && 20 + i * 16 + 16 <= (u32)size; i++) {
         const u8 *e = sfo + 20 + i * 16;
-        u32 k = keys + (e[0] | e[1] << 8), len = *(u32 *)(e + 4), off = data + *(u32 *)(e + 12);
+        u32 k = keys + (e[0] | e[1] << 8), len = rd32(e + 4), off = data + rd32(e + 12);
         if (k >= (u32)size || off + len > (u32)size || strcmp((const char *)sfo + k, key)) continue;
         if ((int)len >= out_size) len = out_size - 1;
         memcpy(out, sfo + off, len);
@@ -188,8 +192,8 @@ static int disc_open(Disc *d, const char *path)
     u8 head[24];
     d->cso = 0;
     if (sceIoRead(d->fd, head, 24) == 24 && !memcmp(head, "CISO", 4)) {
-        u32 block_size = *(u32 *)(head + 16);
-        u64 total = *(u32 *)(head + 8) | (u64) * (u32 *)(head + 12) << 32;
+        u32 block_size = rd32(head + 16);
+        u64 total = rd32(head + 8) | (u64)rd32(head + 12) << 32;
         if (block_size != 2048) { sceIoClose(d->fd); return 0; }
         d->cso = 1;
         d->align = head[21];
@@ -245,8 +249,8 @@ static int disc_find(Disc *d, u32 dir_lba, u32 dir_size, const char *name, u32 *
             const char *fn = (const char *)sec + o + 33;
             if (o + rec > 2048) break;
             if ((flen == nlen || (flen > nlen && fn[nlen] == ';')) && !strncasecmp(fn, name, nlen)) {
-                *lba = *(u32 *)(sec + o + 2);
-                *size = *(u32 *)(sec + o + 10);
+                *lba = rd32(sec + o + 2);
+                *size = rd32(sec + o + 10);
                 return 1;
             }
             o += rec;
@@ -320,7 +324,7 @@ static int read_iso(Game *g, int want_icon, u8 **icon)
     u32 lba, size, dl, ds;
     int ok = 0;
     if (disc_sector(&d, 16, pvd) && !memcmp(pvd + 1, "CD001", 5) &&
-        disc_find(&d, *(u32 *)(pvd + 156 + 2), *(u32 *)(pvd + 156 + 10), "PSP_GAME", &dl, &ds)) {
+        disc_find(&d, rd32(pvd + 156 + 2), rd32(pvd + 156 + 10), "PSP_GAME", &dl, &ds)) {
         if (!want_icon) {
             if (disc_find(&d, dl, ds, "PARAM.SFO", &lba, &size)) {
                 u8 *sfo = disc_file(&d, lba, size, 64 * 1024);
