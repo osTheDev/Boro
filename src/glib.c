@@ -165,6 +165,8 @@ static void apply_log(void)
     }
 }
 
+const char *glib_app_dir(void) { return app_dir; }
+
 const char *glib_last_title(void)
 {
     Played *best = NULL;

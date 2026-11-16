@@ -39,6 +39,7 @@ const Texture *glib_icon(int index);
 
 // The game played last, from the log even before the scan: title or NULL.
 const char *glib_last_title(void);
+const char *glib_app_dir(void); // Boro's own folder, like ms0:/PSP/GAME/Boro
 int glib_last_game(void); // index into games, or -1
 
 // The game page: seconds played on each of the last 7 days (today last), the

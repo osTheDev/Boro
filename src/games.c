@@ -10,6 +10,7 @@
 #include <strings.h>
 #include "gcoll.h"
 #include "glib.h"
+#include "gorder.h"
 #include "gfx.h"
 #include "stats.h"
 #include "ui.h"
@@ -375,6 +376,10 @@ int games_update(const Input *in, float dt)
     if (toast_t > 0) toast_t -= dt;
     take_pic1();
     start_pic1();
+    if (gorder_active()) {
+        if (gorder_update(in, dt) == 2) show_toast("Saved. Back in the PSP menu, it shows the new order.");
+        return 0;
+    }
     if (kb_open) {
         kb_update(in);
         if (!kb_open && open_coll < 0) build();
@@ -411,6 +416,10 @@ int games_update(const Input *in, float dt)
         }
         if (list_count && p & PSP_CTRL_CROSS) open_page(list[sel]);
         else if (list_count && p & PSP_CTRL_TRIANGLE) launch(list[sel]);
+        return 0;
+    }
+    if (p & PSP_CTRL_START && glib_ready() && game_count) {
+        gorder_open();
         return 0;
     }
     if (p & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) {
@@ -758,6 +767,10 @@ static void page_draw(void)
 
 void games_draw(float dt)
 {
+    if (gorder_active()) {
+        gorder_draw(dt);
+        return;
+    }
     if (kb_open) {
         draw_keyboard();
         return;
@@ -823,7 +836,12 @@ void games_draw(float dt)
         glib_format_time(t, sizeof(t), total);
         snprintf(head, sizeof(head), "%d %s \xC2\xB7 %s played", list_count, list_count == 1 ? "game" : "games", total ? t : "nothing");
         font_draw(f_small, 17, 42, head, MUTED, 0);
-        if (tab == TAB_ALL) font_draw_right(f_small, SCREEN_W - 17, 42, sort_names[sort], DIM);
+        float rx = SCREEN_W - 17;
+        if (tab == TAB_ALL) {
+            font_draw_right(f_small, rx, 42, sort_names[sort], DIM);
+            rx -= font_width(f_small, sort_names[sort], 0) + 14;
+        }
+        font_draw_right(f_small, rx, 42, "START PSP menu order", DIM);
         draw_grid(dt);
         if (tab == TAB_ALL) {
             int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, ICON_CIRCLE };
@@ -835,6 +853,7 @@ void games_draw(float dt)
             draw_hints(g, l, 3);
         }
         draw_fail();
+        draw_toast();
     }
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
