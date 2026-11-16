@@ -1,5 +1,6 @@
 // FL/AC: album and artist pages, now playing and the queue.
 #include "flac_internal.h"
+#include "visual.h"
 
 void update_queue(const Input *in)
 {
@@ -201,8 +202,10 @@ static void draw_now_radio(int song)
     // Level bars beside the label while music plays.
     if (!player_paused()) {
         float bx = x + font_width(f9, "NOW PLAYING", 1) + 10;
+        float lv[4];
+        visual_bands(lv, 4, 0);
         for (int i = 0; i < 4; i++) {
-            float h = 3 + 7 * (0.5f + 0.5f * sinf(t_now * (5 + i) + i * 1.7f));
+            float h = 3 + 7 * lv[i];
             ui_rrect(bx + i * 5, 104 - h, 3, h, 1, ACCENT);
         }
     }

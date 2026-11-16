@@ -3,6 +3,7 @@
 // bar and presets, tabbed browsing, and a color picker on SELECT. Colors come
 // from settings; the gradient color cycles its hue.
 #include "deck.h"
+#include "visual.h"
 
 #include <math.h>
 #include <pspctrl.h>
@@ -471,15 +472,16 @@ static void draw_hints(const int *glyphs, const char **labels, int n)
     }
 }
 
-// Spectrum-style bars built from segments; they settle while paused.
+// Spectrum bars from the real audio, built from segments; they settle while paused.
 static void draw_eq(float x, float y, float w, float h, int bars)
 {
     float bw = w / bars;
     int segs = (int)(h / 4);
+    float lv[64];
+    if (bars > 64) bars = 64;
+    visual_bands(lv, bars, 0); // the real audio; falls flat while paused
     for (int i = 0; i < bars; i++) {
-        float k = player_paused() || player_song() < 0 ? 0.08f
-                : 0.5f + 0.25f * sinf(t_now * (3.1f + i * 0.37f) + i) + 0.2f * sinf(t_now * (7.3f - i * 0.21f) + i * 2.3f);
-        k *= 1 - 0.35f * fabsf((float)i / bars - 0.4f);
+        float k = fmaxf(0.08f, lv[i]);
         int lit = (int)(k * segs + 0.5f);
         for (int sgm = 0; sgm < segs; sgm++)
             gfx_rect(x + i * bw, y + h - (sgm + 1) * 4 + 1, bw - 2, 3, sgm < lit ? (sgm >= segs - 2 ? FG : DIM) : FAINT);

@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "sys.h"
 #include "ui.h"
+#include <pspthreadman.h>
 
 #define W 240
 #define H 136
@@ -184,6 +185,15 @@ static void add_part(float x, float y, float vx, float vy, float size)
     if (part_count < MAX_PARTS) parts[part_count++] = (Part){ x, y, vx, vy, 1, size };
 }
 
+// The far water layer's surface at x: the dolphins' waterline.
+static float surface(float x)
+{
+    return 78 + sinf(x * 0.05f + t_now * 0.6f) * 1.6f + sinf(x * 0.11f - t_now * 0.9f) * 1.6f * 0.35f;
+}
+
+// One leap: rises from under the water, arcs and dives back in. Pixels under
+// the waterline are hidden, with a faint shape just below the surface, so it
+// slides in and out instead of popping.
 static void dolphin(float off, float x0, float span, float hgt)
 {
     static const char *sprite[7] = {
@@ -191,22 +201,27 @@ static void dolphin(float off, float x0, float span, float hgt)
         "####################", "#..##############...", "#......##...........",
     };
     float p = fmodf(t_now + off, 6) / 6;
-    if (p > 0.55f) return;
-    float u = p / 0.55f, e = u * u * (3 - 2 * u);
-    float x = x0 + e * span, y = 92 - sinf(e * 3.14159265f) * hgt, ang = -cosf(e * 3.14159265f) * 0.8f;
-    float ca = cosf(ang), sa = sinf(ang);
+    int which = off > 0;
+    static int was_up[2];
+    if (p > 0.75f) { was_up[which] = 0; return; }
+    // A smooth arc: the path starts and ends well under the water.
+    float u = p / 0.75f;
+    float x = x0 + u * span, y = 96 - sinf(u * 3.14159265f) * (hgt + 4);
+    float ang = -cosf(u * 3.14159265f) * 1.0f, ca = cosf(ang), sa = sinf(ang);
     for (int ry = 0; ry < 7; ry++)
         for (int rx = 0; rx < 20; rx++)
             if (sprite[ry][rx] == '#') {
                 float dx = rx - 10, dy = ry - 3;
-                plot((int)(x + dx * ca - dy * sa), (int)(y + dx * sa + dy * ca), L[ry < 3 ? 15 : 12]);
+                int px = (int)(x + dx * ca - dy * sa), py = (int)(y + dx * sa + dy * ca);
+                float under = py - surface(px);
+                if (under < 0) plot(px, py, L[ry < 3 ? 15 : 12]);
+                else if (under < 5) plot(px, py, L[lvl(8 - under)]);
             }
-    static float last_u[2];
-    int which = off > 0;
-    // A splash where it leaves and re-enters the water.
-    if ((last_u[which] < 0.05f) != (u < 0.05f) || (last_u[which] < 0.95f) != (u < 0.95f))
-        for (int k = 0; k < 5; k++) add_part(x, 90, (frand() - 0.5f) * 30, -25 - frand() * 30, 1);
-    last_u[which] = u;
+    // A splash each time its middle crosses the waterline.
+    int up = y < surface(x);
+    if (up != was_up[which] && p > 0.02f)
+        for (int k = 0; k < 6; k++) add_part(x, surface(x), (frand() - 0.5f) * 30 + (up ? 0 : 10), -25 - frand() * 30, 1);
+    was_up[which] = up;
 }
 
 static void scene_dolphins(float dt)
@@ -219,6 +234,10 @@ static void scene_dolphins(float dt)
     disc(196, 22, 10, 13);
     disc(201, 19, 9, 2);
     for (int l = 0; l < 4; l++) {
+        if (l == 1) {
+            dolphin(0, 30, 140, 50);
+            dolphin(0.7f, 52, 120, 38);
+        }
         float base = 78 + l * 14, amp = 1.6f + l * 1.1f;
         for (int x = 0; x < W; x++) {
             float y = base + sinf(x * 0.05f + t_now * (0.6f + l * 0.25f) + l) * amp + sinf(x * 0.11f - t_now * 0.9f) * amp * 0.35f;
@@ -230,8 +249,6 @@ static void scene_dolphins(float dt)
         float sh = 0.5f + 0.5f * sinf(t_now * 1.5f + k * 1.3f);
         fill(188 + sinf(t_now * 0.7f + k) * 5, 82 + k * 5.5f, 12 - k, 1, 6 + sh * 6);
     }
-    dolphin(0, 30, 140, 50);
-    dolphin(0.7f, 52, 120, 38);
     for (int i = 0; i < part_count; i++) {
         Part *p = &parts[i];
         p->life -= dt * 1.2f;
@@ -425,6 +442,14 @@ void visual_draw(float dt)
 
 void visual_bands(float *out, int n, float dt)
 {
-    analyze(dt);
+    // Several screens can ask in one frame: read the audio once per frame.
+    (void)dt;
+    static u64 last;
+    u64 now = sceKernelGetSystemTimeWide();
+    if (!last || now - last > 8000) {
+        float d = last ? (now - last) / 1e6f : 0.016f;
+        analyze(d > 0.1f ? 0.1f : d);
+        last = now;
+    }
     for (int i = 0; i < n; i++) out[i] = band(i * BANDS / n);
 }
