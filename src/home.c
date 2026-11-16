@@ -17,6 +17,7 @@
 #include "glib.h"
 #include "vlib.h"
 #include "games.h"
+#include "blib.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_GAMES, SEL_BOOKS, SEL_STATS, SEL_COUNT };
 #define TILES 4
@@ -38,8 +39,6 @@ static Font *f_quit, *f_note, *f_button;
 static int sel = SEL_MUSIC, last_tile = SEL_MUSIC;
 static float sel_k[SEL_COUNT] = { 1, 0, 0, 0, 0 };
 static float back_k[TILES] = { 1, 0, 0, 0 };
-static char toast[96];
-static float toast_t;
 static float t_now;
 
 // "Quit Boro?" prompt: Stay is picked first, so a double tap of ○ never quits.
@@ -127,12 +126,6 @@ void home_init(void)
     f_button = ui_font(FAMILY_SORA, 700, 12);
 }
 
-static void show_toast(const char *msg)
-{
-    snprintf(toast, sizeof(toast), "%s", msg);
-    toast_t = 2.5f;
-}
-
 static void quit_update(u32 p)
 {
     if (p & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) quit_sel ^= 1;
@@ -161,7 +154,7 @@ int home_update(const Input *in, float dt)
     if (p & PSP_CTRL_CROSS) {
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
         if (sel == SEL_STATS) return library_state() == LIB_READY ? HOME_OPEN_STATS : HOME_STAY;
-        if (sel == SEL_BOOKS) { show_toast("Audiobooks are coming in the next update"); return HOME_STAY; }
+        if (sel == SEL_BOOKS) return HOME_OPEN_BOOKS;
         return sel == SEL_GAMES ? HOME_OPEN_GAMES : HOME_OPEN_VIDEO;
     }
     if (p & PSP_CTRL_TRIANGLE) {
@@ -169,6 +162,7 @@ int home_update(const Input *in, float dt)
         if (t == SEL_MUSIC && player_song() >= 0) return HOME_NOW_PLAYING;
         if (t == SEL_VIDEO && vlib_continue() >= 0) return HOME_RESUME_VIDEO;
         if (t == SEL_GAMES && glib_last_game() >= 0) return HOME_PLAY_GAME;
+        if (t == SEL_BOOKS && blib_current() >= 0) return HOME_RESUME_BOOK;
     }
     if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
@@ -180,7 +174,6 @@ int home_update(const Input *in, float dt)
     }
     int shown = sel == SEL_STATS ? last_tile : sel;
     for (int i = 0; i < TILES; i++) back_k[i] = ui_approach(back_k[i], i == shown ? 1.0f : 0.0f, dt, 5);
-    if (toast_t > 0) toast_t -= dt;
     return HOME_STAY;
 }
 
@@ -334,9 +327,24 @@ static void hero_of(int tile, Hero *h)
                 snprintf(h->sub, sizeof(h->sub), "ISO, CSO and EBOOT games");
         }
     } else {
-        h->label = "BOOKS \xC2\xB7 COMING NEXT";
-        snprintf(h->title, sizeof(h->title), "Audiobooks");
-        snprintf(h->sub, sizeof(h->sub), "Chapters, resume and speed, in the next update");
+        int b = blib_current();
+        if (b >= 0) {
+            const Book *bk = &books[b];
+            int t = blib_playing() == b && player_book_track() >= 0 ? player_book_track() : bk->pos_track;
+            u32 done = blib_elapsed(b), left = bk->total_ms > done ? (bk->total_ms - done) / 60000 : 0;
+            h->label = "BOOKS \xC2\xB7 CONTINUE LISTENING";
+            snprintf(h->title, sizeof(h->title), "%s", bk->title);
+            if (left >= 60) snprintf(h->sub, sizeof(h->sub), "Chapter %d \xC2\xB7 %uh %02um left", t + 1, (unsigned)(left / 60), (unsigned)(left % 60));
+            else snprintf(h->sub, sizeof(h->sub), "Chapter %d \xC2\xB7 %um left", t + 1, (unsigned)left);
+            if (bk->total_ms) h->progress = fminf(1.0f, (float)done / bk->total_ms);
+            h->action = blib_playing() == b && !player_paused() ? "Now Listening" : "Continue";
+        } else {
+            h->label = "BOOKS";
+            snprintf(h->title, sizeof(h->title), "Boro Library");
+            if (!blib_ready()) snprintf(h->sub, sizeof(h->sub), "Dusting off the shelves\xE2\x80\xA6");
+            else if (!book_count) snprintf(h->sub, sizeof(h->sub), "Copy audiobooks into %s", blib_dir());
+            else snprintf(h->sub, sizeof(h->sub), book_count == 1 ? "%d book on the shelf" : "%d books on the shelf", book_count);
+        }
     }
 }
 
@@ -401,6 +409,12 @@ static void draw_back(int tile, float a)
     }
     if (tile == SEL_VIDEO && vlib_continue() >= 0 && (t = vlib_thumb(vlib_continue()))) {
         gfx_tex(t, 0, 0, SCREEN_W, SCREEN_H, tint);
+        return;
+    }
+    if (tile == SEL_BOOKS && blib_current() >= 0 && books[blib_current()].cover[0] &&
+        (t = art_get_file(books[blib_current()].cover, ART_LARGE))) {
+        float sw = t->w * 0.8f, sh = sw * SCREEN_H / SCREEN_W;
+        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
         return;
     }
     if (tile == SEL_GAMES && glib_last_game() >= 0 && glib_last_game() == pic_for && pic_tex) {
@@ -484,15 +498,6 @@ static void hints(Font *f, float y, u32 color)
     }
     x -= 10 + ui_hint_width(f, ICON_CROSS, "Open");
     ui_hint(f, x, y, ICON_CROSS, "Open", color);
-}
-
-static void draw_toast(void)
-{
-    if (toast_t <= 0) return;
-    float a = fminf(1.0f, toast_t * 3), w = font_width(f_small, toast, 0) + 28;
-    gfx_nine(t_fill8, 8, (SCREEN_W - w) / 2, 128, w, 26, RGBA(28, 30, 40, (int)(235 * a)));
-    gfx_nine(t_ring8, 8, (SCREEN_W - w) / 2, 128, w, 26, color_alpha(ACCENT, a));
-    font_draw_center(f_small, SCREEN_W / 2, 145, toast, color_alpha(TEXT, a));
 }
 
 static void stream_draw(void)
@@ -600,7 +605,7 @@ static void web_draw(void)
         if (i == SEL_MUSIC) snprintf(sub, sizeof(sub), "%s", player_song() >= 0 ? song_title(&lib.songs[player_song()]) : "FL/AC");
         else if (i == SEL_VIDEO) snprintf(sub, sizeof(sub), "%s", vlib_continue() >= 0 ? videos[vlib_continue()].title : "TV & Movies");
         else if (i == SEL_GAMES) snprintf(sub, sizeof(sub), "%s", glib_last_title() ? glib_last_title() : "Games");
-        else snprintf(sub, sizeof(sub), "Coming soon");
+        else snprintf(sub, sizeof(sub), "%s", blib_current() >= 0 ? books[blib_current()].title : "Library");
         font_draw_fit(f_px, x + 6, y + 70, sub, W_BLACK, 88);
         if (on) dotted_rect(x + 3, y + 3, 94, 74, W_BLACK);
         if (i == SEL_BOOKS && fmodf(t_now, 1.0f) < 0.6f) {
@@ -709,7 +714,6 @@ void home_draw(void)
     gfx_begin(HEX(0x0B0C10, 255));
     if (settings.home_style == HOME_WEB) web_draw();
     else stream_draw();
-    draw_toast();
     draw_quit();
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();

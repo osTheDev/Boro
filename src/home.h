@@ -6,7 +6,8 @@
 #include "sys.h"
 
 enum { HOME_STAY, HOME_OPEN_MUSIC, HOME_OPEN_SETTINGS, HOME_OPEN_STATS, HOME_OPEN_VIDEO, HOME_OPEN_GAMES,
-       HOME_NOW_PLAYING, HOME_RESUME_VIDEO, HOME_PLAY_GAME };
+       HOME_NOW_PLAYING, HOME_RESUME_VIDEO, HOME_PLAY_GAME,
+       HOME_OPEN_BOOKS, HOME_RESUME_BOOK };
 
 void home_init(void);
 int home_update(const Input *in, float dt);

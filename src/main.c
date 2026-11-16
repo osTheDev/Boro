@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "art.h"
+#include "blib.h"
+#include "books.h"
 #include "flac.h"
 #include "gfx.h"
 #include "games.h"
@@ -35,7 +37,7 @@ PSP_MODULE_INFO("Boro", PSP_MODULE_USER, 0, 1);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO, MODE_SPLASH, MODE_NO_MUSIC, MODE_GAMES };
+enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO, MODE_SPLASH, MODE_NO_MUSIC, MODE_GAMES, MODE_BOOKS };
 
 
 // The music player in the theme picked in Settings.
@@ -106,6 +108,7 @@ int main(int argc, char *argv[])
     vlib_init(data_dir, video_dir, picture_dir);
     plib_init(data_dir, picture_dir);
     glib_init(data_dir, app_dir);
+    blib_init(data_dir, "ms0:/AUDIOBOOKS");
     gcoll_load(data_dir);
     home_init();
 
@@ -135,13 +138,15 @@ int main(int argc, char *argv[])
             playlists_load();
             stats_load(data_dir);
             glib_scan(); // games too, once the music scan is done
+            blib_scan(); // and audiobooks
         }
         stats_frame(dt);
         glib_frame();
+        blib_frame(dt);
         settings_frame(dt);
         // While music plays the PSP mustn't go to sleep, and with "Keep
         // screen on" the backlight stays up too.
-        if (player_song() >= 0 && !player_paused())
+        if (player_active() && !player_paused())
             scePowerTick(settings.keep_on && !screen_off ? PSP_POWER_TICK_ALL : PSP_POWER_TICK_SUSPEND);
         // Full speed only for video (decoding and thumbnails); menus and
         // music run slower to save battery.
@@ -209,6 +214,12 @@ int main(int argc, char *argv[])
             } else if (r == HOME_PLAY_GAME) {
                 mode = MODE_GAMES;
                 games_play(glib_last_game());
+            } else if (r == HOME_OPEN_BOOKS) {
+                mode = MODE_BOOKS;
+                books_enter();
+            } else if (r == HOME_RESUME_BOOK) {
+                mode = MODE_BOOKS;
+                books_enter_now();
             } else if (r == HOME_OPEN_VIDEO) {
                 mode = MODE_VIDEO;
                 video_enter();
@@ -231,6 +242,9 @@ int main(int argc, char *argv[])
         } else if (mode == MODE_GAMES) {
             if (games_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_GAMES) games_draw(dt);
+        } else if (mode == MODE_BOOKS) {
+            if (books_update(&in, dt)) mode = MODE_HOME;
+            if (mode == MODE_BOOKS) books_draw(dt);
         } else if (mode == MODE_STATS) {
             if (stats_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_STATS) stats_draw(dt);
@@ -252,6 +266,7 @@ int main(int argc, char *argv[])
         }
     }
     stats_flush();
+    blib_save();
     video_save(); // quit from the HOME menu mid-video
     sceKernelExitGame();
     return 0;

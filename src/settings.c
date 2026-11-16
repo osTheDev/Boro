@@ -86,7 +86,7 @@ float settings_idle_seconds(void)
 
 void settings_frame(float dt)
 {
-    if (!sleep_choice || player_song() < 0 || player_paused()) return;
+    if (!sleep_choice || !player_active() || player_paused()) return;
     sleep_left -= dt;
     if (sleep_left > FADE_SECONDS) return;
     if (sleep_left > 0) {

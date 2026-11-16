@@ -37,6 +37,11 @@ static volatile int paused, shuffle, locked;
 static volatile int seek_to = -1; // ms into the current song, with flush_to
 static volatile float gain = 1.0f; // the sleep timer fades this out
 
+static BookTrack book[BOOK_TRACKS_MAX];
+static int source_kind;
+static char source_name[128];
+static volatile int book_mode;
+
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
 
@@ -76,6 +81,26 @@ static void close_track(Track *t)
 
 static int song_rate(const Song *s) { return s->sample_rate > 0 ? s->sample_rate : 44100; }
 
+// Book tracks are read through a Song with the same stream fields.
+static const Song *track_song(int id, const char **path)
+{
+    static Song tmp;
+    if (!book_mode) {
+        if (path) *path = song_path(&lib.songs[id]);
+        return &lib.songs[id];
+    }
+    const BookTrack *b = &book[id];
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.audio_start = b->audio_start;
+    tmp.audio_end = b->audio_end;
+    tmp.duration_ms = b->duration_ms;
+    tmp.total_samples = b->total_samples;
+    tmp.enc_delay = b->enc_delay;
+    tmp.sample_rate = b->sample_rate;
+    if (path) *path = b->path;
+    return &tmp;
+}
+
 // Length in bytes of the Layer III frame whose header starts at h, or 0 when
 // h isn't a header for the given sample rate.
 static int frame_length(const u8 *h, int rate)
@@ -112,10 +137,11 @@ static u32 find_frame(SceUID fd, u32 pos, int rate)
 
 static int open_track(Track *t, int song, u32 start_ms)
 {
-    const Song *s = &lib.songs[song];
+    const char *path;
+    const Song *s = track_song(song, &path);
     t->handle = -1;
     t->offset = 0;
-    t->fd = sceIoOpen(song_path(s), PSP_O_RDONLY, 0);
+    t->fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (t->fd < 0) return -1;
     u32 start = s->audio_start;
     if (start_ms && s->duration_ms && start_ms < s->duration_ms) {
@@ -225,7 +251,7 @@ static int decoder_thread(SceSize args, void *argp)
             start_ms = seek_to > 0 ? seek_to : 0;
             seek_to = -1;
             cur_start = 0;
-            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(&lib.songs[order[cur_index]]) / 1000);
+            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(track_song(order[cur_index], NULL)) / 1000);
             flush_to = -1;
             give();
         }
@@ -377,10 +403,21 @@ static void shuffle_from(int first)
     }
 }
 
+static void stop_decoder(void)
+{
+    take();
+    flush_to = count;
+    cur_index = -1;
+    give();
+    while (flush_to >= 0) sceKernelDelayThread(2000);
+}
+
 void player_play(const int *songs, int n, int start, int shuf)
 {
     if (n <= 0) return;
+    if (book_mode) stop_decoder(); // it may be reading a book track
     take();
+    book_mode = 0;
     free(order);
     free(list);
     order = malloc(n * sizeof(int));
@@ -403,8 +440,6 @@ void player_play(const int *songs, int n, int start, int shuf)
     give();
 }
 
-static int source_kind;
-static char source_name[128];
 
 void player_play_from(int kind, const char *name, const int *songs, int count, int start, int shuffle)
 {
@@ -525,7 +560,43 @@ int player_index(int *total)
 int player_song(void)
 {
     int i = cur_index;
-    return i >= 0 && i < count ? order[i] : -1;
+    return !book_mode && i >= 0 && i < count ? order[i] : -1;
+}
+
+int player_book_track(void)
+{
+    int i = cur_index;
+    return book_mode && i >= 0 && i < count ? order[i] : -1;
+}
+
+int player_active(void)
+{
+    int i = cur_index;
+    return i >= 0 && i < count;
+}
+
+void player_play_book(const BookTrack *tracks, int n, int start, u32 start_ms)
+{
+    if (n <= 0) return;
+    if (n > BOOK_TRACKS_MAX) n = BOOK_TRACKS_MAX;
+    stop_decoder(); // the old list must be out of use before it changes
+    take();
+    memcpy(book, tracks, n * sizeof(BookTrack));
+    book_mode = 1;
+    free(order);
+    free(list);
+    order = malloc(n * sizeof(int));
+    list = malloc(n * sizeof(int));
+    for (int i = 0; i < n; i++) order[i] = list[i] = i;
+    count = list_count = n;
+    shuffle = locked = 0;
+    source_kind = FROM_BOOK;
+    if (start < 0 || start >= n) start = 0;
+    paused = 0;
+    seek_to = start_ms ? (int)start_ms : -1;
+    flush_to = start;
+    cur_index = start;
+    give();
 }
 int player_paused(void) { return paused; }
 int player_shuffle(void) { return shuffle; }
