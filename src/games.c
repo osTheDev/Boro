@@ -1,6 +1,7 @@
 #include "games.h"
 
 #include <pspctrl.h>
+#include <pspkernel.h>
 #include <psprtc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,16 +91,60 @@ void games_enter(void)
     scroll = 0;
 }
 
+// PIC1 is read and decoded on its own thread so the page opens at once and
+// the art fades in when it's ready.
+static volatile int pic1_for = -1, pic1_w, pic1_h;
+static u8 *volatile pic1_px;
+static volatile int pic1_busy;
+static int pic1_want;
+static float pic1_k;
+
+static int pic1_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    int index = pic1_for, w = 0, h = 0;
+    u8 *px = glib_pic1(index, &w, &h);
+    if (px && (w <= 0 || h <= 0 || w > 512 || h > 512)) { free(px); px = NULL; }
+    if (pic1_for == index && px) {
+        pic1_w = w;
+        pic1_h = h;
+        pic1_px = px;
+    } else {
+        free(px); // the page was closed meanwhile
+    }
+    pic1_busy = 0;
+    return sceKernelExitDeleteThread(0);
+}
+
 static void open_page(int index)
 {
     page = index;
+    pic1_k = 0;
     glib_detail(index, &detail);
-    int w = 0, h = 0;
-    u8 *px = glib_pic1(index, &w, &h);
-    if (px && w > 0 && h > 0 && w <= 512 && h <= 512) {
-        pic1 = tex_create(w, h);
+    pic1_for = index;
+    pic1_want = 1;
+}
+
+// Starts the reader once the last one (maybe for another page) is done.
+static void start_pic1(void)
+{
+    if (!pic1_want || pic1_busy || page < 0) return;
+    pic1_want = 0;
+    pic1_for = page;
+    pic1_busy = 1;
+    SceUID th = sceKernelCreateThread("boro_pic1", pic1_thread, 0x30, 0x10000, PSP_THREAD_ATTR_USER, NULL);
+    if (th < 0 || sceKernelStartThread(th, 0, NULL) < 0) pic1_busy = 0;
+}
+
+static void take_pic1(void)
+{
+    u8 *px = pic1_px;
+    if (!px) return;
+    pic1_px = NULL;
+    if (page >= 0 && !pic1) {
+        pic1 = tex_create(pic1_w, pic1_h);
         if (pic1) {
-            for (int y = 0; y < h; y++) memcpy(pic1->px + y * pic1->tw, px + y * w * 4, w * 4);
+            for (int y = 0; y < pic1_h; y++) memcpy(pic1->px + y * pic1->tw, px + y * pic1_w * 4, pic1_w * 4);
             tex_upload(pic1);
         }
     }
@@ -109,6 +154,8 @@ static void open_page(int index)
 static void close_page(void)
 {
     page = -1;
+    pic1_for = -1;
+    pic1_want = 0;
     if (pic1) tex_destroy(pic1);
     pic1 = NULL;
 }
@@ -124,6 +171,9 @@ static void launch(int index)
 int games_update(const Input *in, float dt)
 {
     if (fail_t > 0) fail_t -= dt;
+    take_pic1();
+    start_pic1();
+    if (page >= 0) pic1_k = ui_approach(pic1_k, pic1 ? 1 : 0, dt, 6);
     if (page >= 0) {
         if (in->pressed & PSP_CTRL_CROSS) launch(page);
         if (in->pressed & PSP_CTRL_CIRCLE) close_page();
@@ -184,18 +234,20 @@ static void draw_hints(int glyphs[], const char *labels[], int n)
     }
 }
 
-static void draw_icon(int index, float x, float y)
+// Icons fade in over a quiet placeholder as they arrive, instead of popping.
+static float icon_k[1024];
+
+static void draw_icon(int index, float x, float y, float dt)
 {
     const Texture *t = glib_icon(index);
+    float *k = index < 1024 ? &icon_k[index] : NULL;
+    if (k) *k = t ? ui_approach(*k, 1, dt, 8) : 0;
+    float a = t ? (k ? *k : 1) : 0;
+    if (a < 1) gfx_rect(x, y, TILE_W, TILE_H, HEX(0x1E2026, 255));
     if (t) {
         gfx_filter(1);
-        gfx_tex(t, x, y, TILE_W, TILE_H, 0xFFFFFFFF);
-        return;
+        gfx_tex(t, x, y, TILE_W, TILE_H, color_alpha(0xFFFFFFFF, a));
     }
-    u32 c0, c1;
-    ui_placeholder_colors(index * 7 + 3, &c0, &c1);
-    u32 mid = color_lerp(c0, c1, 0.5f);
-    gfx_gradient(x, y, TILE_W, TILE_H, c0, mid, mid, c1);
 }
 
 static void draw_badge(float x, float y, const char *label)
@@ -220,7 +272,7 @@ static void draw_grid(float dt)
         int on = i == sel;
         if (on) ui_rrect(x - 3, y - 3, TILE_W + 6, TILE_H + 6, 8, ACCENT);
         if (on) ui_rrect(x - 1, y - 1, TILE_W + 2, TILE_H + 2, 7, BG);
-        draw_icon(list[i], x, y);
+        draw_icon(list[i], x, y, dt);
         ui_round_corners(x, y, TILE_W, TILE_H, 6, BG);
         if (g->type == GTYPE_PS1) draw_badge(x, y, "PS1");
         else if (g->type == GTYPE_HOMEBREW) draw_badge(x, y, "HOMEBREW");
@@ -266,7 +318,7 @@ static void page_draw(void)
     gfx_begin(BG);
     if (pic1) {
         gfx_filter(1);
-        gfx_tex_part(pic1, 0, 0, pic1->w, pic1->h * 140 / 272, 0, 0, SCREEN_W, 140, 0xFFFFFFFF);
+        gfx_tex_part(pic1, 0, 0, pic1->w, pic1->h * 140 / 272, 0, 0, SCREEN_W, 140, color_alpha(0xFFFFFFFF, pic1_k));
         u32 top = color_alpha(BG, 0.35f), bottom = BG;
         gfx_gradient(0, 0, SCREEN_W, 140, top, top, bottom, bottom);
     }
