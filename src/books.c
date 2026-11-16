@@ -215,12 +215,48 @@ static float pill_w(const char *label) { return font_width(f_button, label, 0) +
 #define FLOOR 226
 #define COVER_H 114
 
-static void shelf_update(u32 p, u32 nav)
+static float hold_t, toast_t; // square held; "Starting over" note
+static int hold_fired;
+
+static int restartable(void)
+{
+    if (!list_n) return -1;
+    int b = list[sel];
+    return books[b].finished || books[b].last[0] || books[b].pos_track || books[b].pos_ms ? b : -1;
+}
+
+// Back to the shelf: the book stops (paused, place saved).
+static void pause_book(void)
+{
+    if (blib_playing() >= 0 && player_book_track() >= 0 && !player_paused()) player_toggle_pause();
+    blib_save();
+}
+
+static void shelf_update(u32 p, u32 nav, u32 held, float dt)
 {
     if (!blib_ready()) return;
     int old = sel;
+    // Holding square 2 s starts the book over; a quick press changes the sort.
+    if (held & PSP_CTRL_SQUARE) {
+        hold_t += dt;
+        if (hold_t >= 2 && !hold_fired) {
+            hold_fired = 1;
+            int b = restartable();
+            if (b >= 0) {
+                blib_restart(b);
+                if (blib_playing() == b) pause_book();
+                toast_t = 1.6f;
+                build();
+                for (int i = 0; i < list_n; i++) if (list[i] == b) sel = i;
+                grow = 0;
+            }
+        }
+        return;
+    }
+    if (hold_t > 0 && hold_t < 0.6f) { sort_title ^= 1; build(); }
+    hold_t = 0;
+    hold_fired = 0;
     if (p & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) { tab ^= 1; sel = 0; shelf_x = 0; build(); }
-    if (p & PSP_CTRL_SQUARE) { sort_title ^= 1; build(); }
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
     if (nav & PSP_CTRL_RIGHT && sel < list_n - 1) sel++;
     if (sel != old) grow = 0;
@@ -354,12 +390,26 @@ static void shelf_draw(void)
     gfx_rect(8, FLOOR + 6, SCREEN_W - 16, 3, HEX(0x1E1814, 255));
     int current = blib_current();
     static const int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, -1, ICON_CIRCLE };
-    const char *l[] = { "Open", "Continue", sort_title ? "Sort: Title" : "Sort: Recent", "L/R Shelf", "Back" };
+    const char *l[] = { "Open", "Continue", "Sort, hold: Restart", "L/R Shelf", "Back" };
     if (current >= 0) hints_bar(g, l, 5, 264);
     else {
         static const int g2[] = { ICON_CROSS, ICON_SQUARE, -1, ICON_CIRCLE };
         const char *l2[] = { "Open", l[2], "L/R Shelf", "Back" };
         hints_bar(g2, l2, 4, 264);
+    }
+    // Hold square: a bar fills, then the book starts over.
+    float bw = 220, bx = SCREEN_W - 16 - bw, by = 40;
+    if (hold_t > 0.3f && !hold_fired && restartable() >= 0) {
+        float k = hold_t / 2 > 1 ? 1 : hold_t / 2;
+        ui_rrect(bx, by, bw, 30, 8, HEX(0x2C2622, 245));
+        font_draw_center(f_small, bx + bw / 2, by + 13, "Keep holding to start over", TEXT);
+        ui_rrect(bx + 12, by + 20, bw - 24, 3, 1, TRACK_BG);
+        ui_rrect(bx + 12, by + 20, (bw - 24) * k, 3, 1, WARM);
+    } else if (toast_t > 0) {
+        toast_t -= 1.0f / 60;
+        float a = toast_t > 1 ? 1 : toast_t;
+        ui_rrect(bx, by, bw, 24, 8, color_alpha(HEX(0x2C2622, 245), a));
+        font_draw_center(f_small, bx + bw / 2, by + 16, "Back to the beginning", color_alpha(TEXT, a));
     }
 }
 
@@ -370,7 +420,7 @@ static void card_update(u32 p)
     if (p & PSP_CTRL_LEFT && button > 0) button--;
     if (p & PSP_CTRL_RIGHT && button < 2) button++;
     if (p & PSP_CTRL_TRIANGLE) button = 1, p |= PSP_CTRL_CROSS;
-    if (p & PSP_CTRL_CIRCLE) { view = V_SHELF; build(); return; }
+    if (p & PSP_CTRL_CIRCLE) { pause_book(); view = V_SHELF; build(); return; }
     if (!(p & PSP_CTRL_CROSS)) return;
     if (button == 0) {
         if (blib_playing() != page) blib_play(page);
@@ -636,7 +686,7 @@ int books_update(const Input *in, float dt)
     switch (view) {
     case V_SHELF:
         if (p & PSP_CTRL_CIRCLE) return 1;
-        shelf_update(p, nav);
+        shelf_update(p, nav, in->held, dt);
         break;
     case V_CARD: card_update(p); break;
     case V_NOW: now_update(p, nav); break;
