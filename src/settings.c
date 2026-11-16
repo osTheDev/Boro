@@ -11,12 +11,13 @@
 #include "ui.h"
 #include "version.h"
 
-Settings settings = { THEME_FLAC, DECK_AMBER, 1, 1, 1, DELAY_1M, 0, 1, FIT_FIT, HOME_STREAM };
+Settings settings = { THEME_FLAC, DECK_AMBER, 1, 1, 1, DELAY_1M, 0, 1, FIT_FIT, HOME_STREAM, 0 };
 const char *const fit_names[FIT_COUNT] = { "Fit", "Zoom", "Stretch" };
 const char *const theme_names[THEME_COUNT] = { "FL/AC", "iPod", "Head unit" };
 const char *const deck_color_names[DECK_COLORS] = { "Ice blue", "Amber", "Green", "Red", "White", "Purple", "Gradient" };
 
 const char *const home_style_names[HOME_STYLES] = { "Stream", "Web" };
+const float book_speeds[BOOK_SPEEDS] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 0.75f };
 static const char *const delay_names[DELAY_COUNT] = { "15 sec", "30 sec", "1 min", "2 min" };
 #define VIS_STYLES 6
 static const char *const vis_names[VIS_STYLES] = {
@@ -53,18 +54,19 @@ void settings_load(const char *data_dir)
         else if (sscanf(line, "vis_style=%d", &v) == 1) settings.vis_style = clampi(v, 0, VIS_STYLES - 1);
         else if (sscanf(line, "resume_videos=%d", &v) == 1) settings.resume_videos = v != 0;
         else if (sscanf(line, "video_fit=%d", &v) == 1) settings.video_fit = clampi(v, 0, FIT_COUNT - 1);
+        else if (sscanf(line, "book_speed=%d", &v) == 1) settings.book_speed = clampi(v, 0, BOOK_SPEEDS - 1);
         else if (sscanf(line, "home_style=%d", &v) == 1) settings.home_style = clampi(v, 0, HOME_STYLES - 1);
     }
 }
 
 void settings_save(void)
 {
-    char buf[256], dir[300];
+    char buf[320], dir[300];
     int n = snprintf(buf, sizeof(buf),
-                     "theme=%d\ndeck_color=%d\ndeck_speed=%d\nkeep_on=%d\nidle_vis=%d\nidle_delay=%d\nvis_style=%d\nresume_videos=%d\nvideo_fit=%d\nhome_style=%d\n",
+                     "theme=%d\ndeck_color=%d\ndeck_speed=%d\nkeep_on=%d\nidle_vis=%d\nidle_delay=%d\nvis_style=%d\nresume_videos=%d\nvideo_fit=%d\nhome_style=%d\nbook_speed=%d\n",
                      settings.theme, settings.deck_color, settings.deck_speed, settings.keep_on, settings.idle_vis,
                      settings.idle_delay, settings.vis_style, settings.resume_videos, settings.video_fit,
-                     settings.home_style);
+                     settings.home_style, settings.book_speed);
     snprintf(dir, sizeof(dir), "%s", path);
     char *slash = strrchr(dir, '/');
     if (slash) { *slash = 0; sceIoMkdir(dir, 0777); }
@@ -83,6 +85,19 @@ float settings_idle_seconds(void)
     return secs[settings.idle_delay];
 #endif
 }
+
+void settings_sleep_cycle(void)
+{
+    sleep_choice = (sleep_choice + 1) % SLEEP_CHOICES;
+#ifdef BORO_SCRIPT
+    sleep_left = sleep_minutes[sleep_choice];
+#else
+    sleep_left = sleep_minutes[sleep_choice] * 60.0f;
+#endif
+    player_set_gain(1);
+}
+
+int settings_sleep_left(void) { return sleep_choice ? (int)((sleep_left + 59) / 60) : 0; }
 
 void settings_frame(float dt)
 {

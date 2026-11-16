@@ -45,6 +45,9 @@ static int source_kind;
 static char source_name[128];
 static volatile int book_mode;
 
+static volatile float speed = 1.0f; // books only; changed through a flush
+static float eff_speed(void) { return book_mode ? speed : 1.0f; }
+
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
 
@@ -63,6 +66,8 @@ typedef struct {
     u32 total;  // remaining when decoding started
     int aac;    // reading an M4B through the AAC decoder
 } Track;
+
+static void stretch_reset(void);
 
 // ---- AAC (M4B audiobooks) ------------------------------------------------------
 // The open book file stays open between its chapters.
@@ -198,6 +203,7 @@ static u32 find_frame(SceUID fd, u32 pos, int rate)
 static int open_track(Track *t, int song, u32 start_ms)
 {
     t->aac = 0;
+    stretch_reset();
     if (book_mode && book[song].kind == BOOK_M4B) return open_aac(t, &book[song], start_ms);
     const char *path;
     const Song *s = track_song(song, &path);
@@ -240,6 +246,85 @@ static int open_track(Track *t, int song, u32 start_ms)
     return 0;
 }
 
+static void ring_write(const s16 *pcm, u32 frames)
+{
+    take();
+    for (u32 i = 0; i < frames; i++) {
+        u32 at = (wr + i) % RING;
+        ring[at * 2] = pcm[i * 2];
+        ring[at * 2 + 1] = pcm[i * 2 + 1];
+    }
+    wr += frames;
+    give();
+}
+
+// ---- Speed for books: time-stretching that keeps the pitch ---------------------
+// WSOLA: the input is read in steps of hop * speed, each step's piece placed
+// where it lines up best with the natural continuation of the last one
+// (searched within +-hop/4), then crossfaded in. Output steps are hop frames.
+
+#define ST_HOP 1024
+#define ST_IN 16384
+static s16 st_in[ST_IN * 2];
+static s16 st_tail[ST_HOP * 2], st_out[ST_HOP * 2];
+static int st_n, st_have_tail;
+static float st_pos;
+
+static void stretch_reset(void)
+{
+    st_n = 0;
+    st_have_tail = 0;
+    st_pos = ST_HOP / 4;
+}
+
+static void stretch_push(const s16 *pcm, u32 frames, int rate)
+{
+    int hop = rate >= 32000 ? ST_HOP : ST_HOP / 2, reach = hop / 4;
+    while (frames) {
+        u32 room = (u32)(ST_IN - st_n), n = room < frames ? room : frames;
+        memcpy(st_in + st_n * 2, pcm, n * 4);
+        st_n += n;
+        pcm += n * 2;
+        frames -= n;
+        for (;;) {
+            int p = (int)st_pos;
+            if (p + reach + 2 * hop > st_n) break;
+            int best = 0;
+            if (st_have_tail) {
+                // Best lineup, compared on every 4th frame, mixed to mono.
+                s64 best_c = -((s64)1 << 62);
+                for (int d = -reach; d <= reach; d += 2) {
+                    const s16 *a = st_tail, *b = st_in + (p + d) * 2;
+                    s64 c = 0;
+                    for (int i = 0; i < hop; i += 4)
+                        c += (s64)(a[i * 2] + a[i * 2 + 1]) * (b[i * 2] + b[i * 2 + 1]);
+                    if (c > best_c) { best_c = c; best = d; }
+                }
+            }
+            const s16 *seg = st_in + (p + best) * 2;
+            if (st_have_tail) {
+                for (int i = 0; i < hop; i++)
+                    for (int c = 0; c < 2; c++)
+                        st_out[i * 2 + c] = (s16)((st_tail[i * 2 + c] * (hop - i) + seg[i * 2 + c] * i) / hop);
+                ring_write(st_out, hop);
+            } else {
+                ring_write(seg, hop);
+            }
+            memcpy(st_tail, seg + hop * 2, hop * 4);
+            st_have_tail = 1;
+            st_pos += hop * speed;
+            // Drop what's behind us.
+            int drop = (int)st_pos - reach;
+            if (drop > ST_IN / 2) {
+                memmove(st_in, st_in + drop * 2, (st_n - drop) * 4);
+                st_n -= drop;
+                st_pos -= drop;
+            }
+        }
+        if (n == 0) { st_n = 0; st_pos = reach; } // full and stuck: start over
+    }
+}
+
 // Decodes one MP3 frame into the ring. Returns 0 at the end of the track.
 static int decode_frame(Track *t)
 {
@@ -279,14 +364,8 @@ static int decode_frame(Track *t)
     if (frames > t->remaining) frames = t->remaining;
     t->remaining -= frames;
 
-    take();
-    for (u32 i = 0; i < frames; i++) {
-        u32 at = (wr + i) % RING;
-        ring[at * 2] = pcm[i * 2];
-        ring[at * 2 + 1] = pcm[i * 2 + 1];
-    }
-    wr += frames;
-    give();
+    if (eff_speed() != 1.0f) stretch_push(pcm, frames, t->rate);
+    else ring_write(pcm, frames);
     return t->remaining > 0;
 }
 
@@ -328,7 +407,7 @@ static int decoder_thread(SceSize args, void *argp)
             start_ms = seek_to > 0 ? seek_to : 0;
             seek_to = -1;
             cur_start = 0;
-            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(track_song(order[cur_index], NULL)) / 1000);
+            if (start_ms && cur_index >= 0) cur_start -= (u32)((u64)start_ms * song_rate(track_song(order[cur_index], NULL)) / 1000 / eff_speed());
             flush_to = -1;
             give();
         }
@@ -359,7 +438,7 @@ static int decoder_thread(SceSize args, void *argp)
             open = 1;
             take();
             if (mark_count == MARKS) memmove(marks, marks + 1, --mark_count * sizeof(Marker));
-            marks[mark_count++] = (Marker){ wr, index, t.rate, t.offset };
+            marks[mark_count++] = (Marker){ wr, index, t.rate, (u32)(t.offset / eff_speed()) };
             give();
         }
         take();
@@ -683,5 +762,22 @@ u32 player_position_ms(void)
 {
     if (cur_index < 0 || flush_to >= 0) return 0;
     u32 played = rd - cur_start;
-    return (u32)((u64)played * 1000 / (cur_rate ? cur_rate : 44100));
+    return (u32)((u64)played * 1000 / (cur_rate ? cur_rate : 44100) * eff_speed());
+}
+
+float player_speed(void) { return speed; }
+
+void player_set_speed(float s)
+{
+    if (s < 0.5f) s = 0.5f;
+    if (s > 2.0f) s = 2.0f;
+    if (s == speed) return;
+    if (!book_mode || cur_index < 0) { speed = s; return; }
+    // Restart from where we are, so positions stay right at the new speed.
+    u32 at = player_position_ms();
+    take();
+    speed = s;
+    seek_to = at;
+    flush_to = cur_index;
+    give();
 }

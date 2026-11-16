@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "glib.h"
 #include "player.h"
+#include "settings.h"
 #include "ui.h"
 
 #define WOOD HEX(0x3A2418, 255)
@@ -443,6 +444,12 @@ static void now_update(u32 p, u32 nav)
         view = V_CONTENTS;
         return;
     }
+    if (p & PSP_CTRL_SQUARE) {
+        settings.book_speed = (settings.book_speed + 1) % BOOK_SPEEDS;
+        settings_save();
+        player_set_speed(book_speeds[settings.book_speed]);
+    }
+    if (p & PSP_CTRL_START) settings_sleep_cycle();
     if (!mine) return;
     if (nav & PSP_CTRL_LEFT) skip(b, -30);
     if (nav & PSP_CTRL_RIGHT) skip(b, 30);
@@ -483,7 +490,7 @@ static void now_draw(void)
     font_draw_right(f_tiny, 448, 88, rest, FADE);
     bar(258, 94, 190, len ? fminf(1.0f, (float)ms / len) : 0, RED, TRACK_BG);
 
-    float cx = 352, cy = 128;
+    float cx = 352, cy = 124;
     font_draw_center(f_text, cx - 82, cy + 4, "-30s", FADE);
     font_draw_center(f_text, cx + 82, cy + 4, "+30s", FADE);
     ui_icon(ICON_PREV, cx - 52, cy - 8, 16, INK);
@@ -492,23 +499,41 @@ static void now_draw(void)
     int playing_now = mine && !player_paused();
     ui_icon(playing_now ? ICON_PAUSE : ICON_PLAY, cx - 8, cy - 8, 16, PAPER);
 
-    if (!mine) font_draw_center(f_small, cx, cy + 36, bk->last[0] ? "Paused here \xC2\xB7 press X to listen" : "Press X to start listening", FADE);
-    font_draw(f_bold, 258, 190, "Book", FADE, 0);
+    if (!mine) font_draw_center(f_tiny, cx, cy + 26, bk->last[0] ? "Paused here \xC2\xB7 press X to listen" : "Press X to start listening", FADE);
+    // Speed and sleep tags.
+    char sp[32], sl[32];
+    float v = book_speeds[settings.book_speed];
+    if (v == (int)v) snprintf(sp, sizeof(sp), "Speed %d\xC3\x97", (int)v);
+    else snprintf(sp, sizeof(sp), "Speed %g\xC3\x97", v);
+    int sleep_min = settings_sleep_left();
+    if (sleep_min) snprintf(sl, sizeof(sl), "Sleep %d min", sleep_min);
+    else snprintf(sl, sizeof(sl), "Sleep off");
+    float tx = 258;
+    const char *tags[2] = { sp, sl };
+    for (int i = 0; i < 2; i++) {
+        float tw = font_width(f_bold, tags[i], 0) + 18;
+        int on = i == 0 ? settings.book_speed != 0 : sleep_min != 0;
+        gfx_rect(tx, 156, tw, 20, on ? HEX(0xEAD9B0, 255) : PAPER2);
+        ui_ring(tx, 156, tw, 20, 0, on ? BRASS : HEX(0xB4A082, 255));
+        font_draw(f_bold, tx + 9, 170, tags[i], INK, 0);
+        tx += tw + 8;
+    }
+    font_draw(f_bold, 258, 196, "Book", FADE, 0);
     float bp = bk->total_ms ? fminf(1.0f, (float)blib_elapsed(b) / bk->total_ms) : 0;
     if (mine && bk->total_ms) {
         u32 done = ms;
         for (int i = 0; i < t; i++) done += bk->tracks[i].duration_ms;
         bp = fminf(1.0f, (float)done / bk->total_ms);
     }
-    bar(292, 186, 156, bp, BRASS, TRACK_BG);
+    bar(292, 192, 156, bp, BRASS, TRACK_BG);
     char line[64], left[32];
     format_len(left, sizeof(left), (u32)(bk->total_ms * (1 - bp)));
     snprintf(line, sizeof(line), "%d%% read \xC2\xB7 %s left \xC2\xB7 Ch %d of %d", (int)(bp * 100), left, t + 1, bk->track_count);
-    font_draw_fit(f_tiny, 258, 206, line, FADE, 190);
+    font_draw_fit(f_tiny, 258, 214, line, FADE, 190);
 
-    static const int g[] = { -1, -1, ICON_TRIANGLE, ICON_CROSS, ICON_CIRCLE };
-    const char *l[] = { "\xE2\x86\x90\xE2\x86\x92 30s", "L/R Chapter", "Contents", playing_now ? "Pause" : "Play", "Back" };
-    hints_bar(g, l, 5, 258);
+    static const int g[] = { -1, -1, ICON_TRIANGLE, ICON_SQUARE, -1, ICON_CROSS, ICON_CIRCLE };
+    const char *l[] = { "\xE2\x86\x90\xE2\x86\x92 30s", "L/R Chapter", "Contents", "Speed", "START Sleep", playing_now ? "Pause" : "Play", "Back" };
+    hints_bar(g, l, 7, 258);
 }
 
 // ---- Contents -----------------------------------------------------------------------------

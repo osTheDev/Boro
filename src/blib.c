@@ -9,6 +9,7 @@
 #include <string.h>
 #include "tags.h"
 #include "m4b.h"
+#include "settings.h"
 
 Book *books;
 int book_count;
@@ -368,6 +369,7 @@ void blib_play_track(int book, int track)
     stamp(b);
     playing = book;
     was_last_track = 0;
+    player_set_speed(book_speeds[settings.book_speed]);
     player_play_book(b->tracks, b->track_count, track, 0);
     blib_save();
 }
@@ -383,6 +385,7 @@ void blib_play(int book)
     was_last_track = 0;
     // A few seconds back, to pick up the thread.
     u32 from = b->pos_ms > 5000 ? b->pos_ms - 5000 : 0;
+    player_set_speed(book_speeds[settings.book_speed]);
     player_play_book(b->tracks, b->track_count, b->pos_track, from);
     blib_save();
 }
@@ -429,6 +432,9 @@ void blib_frame(float dt)
         b->pos_ms = ms;
     }
     was_last_track = track == b->track_count - 1 && ms + 5000 >= b->tracks[track].duration_ms;
+    static int was_paused;
+    if (player_paused() && !was_paused) blib_save(); // paused (or the sleep timer stopped it)
+    was_paused = player_paused();
     if (!player_paused()) save_t += dt;
     if (save_t > 20) {
         save_t = 0;

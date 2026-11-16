@@ -22,6 +22,7 @@ typedef struct {
     int resume_videos;
     int video_fit;  // FIT_*, for videos without their own choice
     int home_style; // HOME_*
+    int book_speed; // index into book_speeds
 } Settings;
 
 extern Settings settings;
@@ -29,6 +30,8 @@ extern const char *const theme_names[THEME_COUNT];
 extern const char *const deck_color_names[DECK_COLORS];
 extern const char *const fit_names[FIT_COUNT];
 extern const char *const home_style_names[HOME_STYLES];
+#define BOOK_SPEEDS 6
+extern const float book_speeds[BOOK_SPEEDS]; // 1, 1.25, 1.5, 1.75, 2, 0.75
 
 void settings_load(const char *data_dir);
 void settings_save(void);
@@ -37,6 +40,8 @@ float settings_idle_seconds(void);
 // Sleep timer (not saved): counts down while music plays, then fades the
 // music out and pauses it. Call once per frame.
 void settings_frame(float dt);
+void settings_sleep_cycle(void);  // Off, 15, 30, 45, 60, 90 minutes, then Off
+int settings_sleep_left(void);    // minutes left, or 0 when off
 
 void settings_enter(void);
 // Returns 1 when the user backs out.

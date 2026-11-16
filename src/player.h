@@ -25,6 +25,9 @@ typedef struct {
 void player_play_book(const BookTrack *tracks, int count, int start, u32 start_ms);
 int player_book_track(void); // index into the book's tracks, or -1 when no book is loaded
 int player_active(void);     // something (music or a book) is loaded
+// Book playback speed, 0.5..2, keeping the voice's pitch. Music always plays at 1.
+void player_set_speed(float s);
+float player_speed(void);
 
 // Plays songs[start], then the rest of the list. With shuffle, the list is
 // shuffled with songs[start] first.
