@@ -191,14 +191,6 @@ static void panel(float x, float y, float w, float h, int big, float k)
     gfx_nine(ring, b, x, y, w, h, color_lerp(RGBA(255, 255, 255, 20), ACCENT, k));
 }
 
-static float pingpong_eq(float t, float dur, float off)
-{
-    float ph = fmodf((t + off) / dur, 2.0f);
-    float u = ph < 1 ? ph : 2 - ph;
-    u = u * u * (3 - 2 * u);
-    return u < 0.5f ? 0.25f + (1.0f - 0.25f) * (u * 2) : 1.0f + (0.45f - 1.0f) * ((u - 0.5f) * 2);
-}
-
 void home_backdrop(void)
 {
     float a = (1 - cosf(t_now * 2 * M_PI / 14.0f)) * 0.5f;
@@ -644,12 +636,14 @@ static void stream_tiles(void)
         panel(x, y, w, h, 0, k);
         gfx_nine(t_fill14, 14, x, y, w, h, RGBA(16, 18, 26, (int)(150 - 40 * k)));
         gfx_tex(*icons[i], x + 10, y + 9, 20, 20, color_lerp(ICON_IDLE, ACCENT, k));
-        if (i == SEL_MUSIC && player_song() >= 0 && !player_paused())
+        if (i == SEL_MUSIC && player_song() >= 0 && !player_paused()) {
+            float lv[4];
+            visual_bands(lv, 4, 0);
             for (int b = 0; b < 4; b++) {
-                static const float dur[4] = { 0.5f, 0.7f, 0.45f, 0.8f };
-                float bh = 12 * pingpong_eq(t_now, dur[b], b * 0.13f);
+                float bh = 2 + 10 * lv[b];
                 gfx_rect(x + w - 30 + b * 5, y + 9 + 12 - bh, 3, bh, ACCENT);
             }
+        }
         font_draw(f_mid, x + 10, y + h - 10, tile_names[i], color_lerp(MUTED, TEXT, k), 0);
         x += w + 12;
     }
