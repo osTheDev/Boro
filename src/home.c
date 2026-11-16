@@ -405,7 +405,6 @@ static void music_back(float a)
 {
     u32 tint = color_alpha(0xFFFFFFFF, a);
     int song = player_song();
-    const Texture *t = song >= 0 ? art_get(song, ART_LARGE) : NULL;
     gfx_filter(1);
     if (settings.theme == THEME_DECK) {
         u32 fg, bg;
@@ -414,6 +413,47 @@ static void music_back(float a)
         u32 dot = color_alpha(color_lerp(bg, fg, 0.10f), a);
         for (int y = 0; y < SCREEN_H; y += 4) gfx_rect(0, y, SCREEN_W, 2, dot); // LCD dot grid:
         for (int x = 2; x < SCREEN_W; x += 4) gfx_rect(x, 0, 2, SCREEN_H, color_alpha(bg, a)); // rows cut into dots
+        return;
+    }
+    if (settings.theme == THEME_POD) {
+        // Brushed aluminium.
+        static u8 shade[SCREEN_H / 2];
+        static int made;
+        if (!made) {
+            made = 1;
+            u32 seed = 3;
+            for (int i = 0; i < SCREEN_H / 2; i++) {
+                seed = seed * 1103515245u + 12345u;
+                shade[i] = (u8)(150 - i / 3 + (int)((seed >> 16) % 9) - 4);
+            }
+        }
+        for (int i = 0; i < SCREEN_H / 2; i++) gfx_rect(0, i * 2, SCREEN_W, 2, color_alpha(RGBA(shade[i], shade[i] + 2, shade[i] + 6, 255), a));
+        return;
+    }
+    // FL/AC: the cover's colors, soft and dark.
+    const Texture *t = song >= 0 ? art_get(song, ART_LARGE) : NULL;
+    if (t) {
+        float sw = t->w * 0.5f, sh = sw * SCREEN_H / SCREEN_W;
+        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
+        gfx_rect(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x3C2819, 90), a));
+    } else {
+        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x4A3020, 255), a),
+                     color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x1E1814, 255), a));
+    }
+}
+
+// What each skin shows on the right, drawn over the shading so it stays
+// crisp. Everything sits between the clock row and the tiles.
+static void music_front(float a)
+{
+    u32 tint = color_alpha(0xFFFFFFFF, a);
+    int song = player_song();
+    const Song *s = song >= 0 ? &lib.songs[song] : NULL;
+    const Texture *t = song >= 0 ? art_get(song, settings.theme == THEME_POD ? ART_SMALL : ART_LARGE) : NULL;
+    gfx_filter(1);
+    if (settings.theme == THEME_DECK) {
+        u32 fg, bg;
+        deck_colors(&fg, &bg);
         Font *big = ui_font(FAMILY_SILKSCREEN, 700, 16), *small = ui_font(FAMILY_SILKSCREEN, 400, 8);
         gfx_filter(0);
         float x = 262;
@@ -421,57 +461,67 @@ static void music_back(float a)
         gfx_rect(x + 1, 41, 44, 11, color_alpha(bg, a));
         font_draw(small, x + 5, 50, "FL/AC", color_alpha(fg, a), 0);
         char name[128];
-        snprintf(name, sizeof(name), "%s", song >= 0 ? song_title(&lib.songs[song]) : "NO DISC");
+        snprintf(name, sizeof(name), "%s", s ? song_title(s) : "NO DISC");
         for (char *c = name; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
-        font_draw_fit(big, x, 78, name, color_alpha(fg, a), 202);
-        if (song >= 0) font_draw_fit(small, x, 92, song_artist(&lib.songs[song]), color_alpha(color_lerp(bg, fg, 0.7f), a), 202);
+        font_draw_fit(big, x, 76, name, color_alpha(fg, a), 200);
+        if (s) font_draw_fit(small, x, 90, song_artist(s), color_alpha(color_lerp(bg, fg, 0.7f), a), 200);
         // EQ from the real audio.
         for (int i = 0; i < 25; i++) {
-            int h = (int)(eq[i] * 13 + 0.5f);
-            for (int s = 0; s < 13; s++) {
-                u32 c = s < h ? fg : color_lerp(bg, fg, 0.15f);
-                gfx_rect(x + i * 8, 164 - s * 5, 6, 3, color_alpha(c, a));
-            }
+            int h = (int)(eq[i] * 10 + 0.5f);
+            for (int k = 0; k < 10; k++)
+                gfx_rect(x + i * 8, 147 - k * 5, 6, 3, color_alpha(k < h ? fg : color_lerp(bg, fg, 0.18f), a));
         }
         gfx_filter(1);
         return;
     }
     if (settings.theme == THEME_POD) {
-        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0xF0F2F6, 255), a), color_alpha(HEX(0xF0F2F6, 255), a),
-                     color_alpha(HEX(0xC9CCD4, 255), a), color_alpha(HEX(0xC9CCD4, 255), a));
-        gfx_rect(0, 0, SCREEN_W, 30, color_alpha(HEX(0xD6D9E0, 255), a));
-        font_draw(f_small_b, 240, 22, "FL/AC classic", color_alpha(HEX(0x28282F, 255), a), 0);
-        float cx = 330, cy = 44, cs = 124;
-        if (t) {
-            gfx_tex(t, cx, cy, cs, cs, tint);
-            // A soft reflection: the cover's bottom rows, faded.
-            gfx_tex_part(t, 0, t->h * 0.75f, t->w, t->h * 0.25f, cx, cy + cs + 2, cs, cs * 0.25f, color_alpha(0xFFFFFFFF, a * 0.25f));
-            gfx_gradient(cx, cy + cs + 2, cs, cs * 0.25f, color_alpha(HEX(0xD8DBE2, 0), a), color_alpha(HEX(0xD8DBE2, 0), a),
-                         color_alpha(HEX(0xD8DBE2, 255), a), color_alpha(HEX(0xD8DBE2, 255), a));
-        } else {
-            ui_icon(ICON_NOTE, cx + cs / 2 - 24, cy + cs / 2 - 24, 48, color_alpha(HEX(0x9A9DA8, 255), a));
+        // An iPod's Now Playing screen.
+        const float sx = 300, sy = 40, sw = 164, sh = 112;
+        gfx_nine(t_fill8, 8, sx - 4, sy - 4, sw + 8, sh + 8, color_alpha(HEX(0x28292F, 255), a));
+        gfx_rect(sx, sy, sw, sh, color_alpha(HEX(0xFAFAFC, 255), a));
+        gfx_gradient(sx, sy, sw, 14, color_alpha(HEX(0xE8EAEE, 255), a), color_alpha(HEX(0xE8EAEE, 255), a),
+                     color_alpha(HEX(0xC8CAD2, 255), a), color_alpha(HEX(0xC8CAD2, 255), a));
+        u32 ink = color_alpha(HEX(0x1E1E24, 255), a), soft = color_alpha(HEX(0x5A5A66, 255), a);
+        font_draw_center(f_tiny, sx + sw / 2, sy + 11, "Now Playing", ink);
+        ui_icon(player_paused() ? ICON_PAUSE : ICON_PLAY, sx + 4, sy + 3, 8, ink);
+        if (t) gfx_tex(t, sx + 8, sy + 22, 58, 58, tint);
+        else {
+            gfx_rect(sx + 8, sy + 22, 58, 58, color_alpha(HEX(0xD8DAE0, 255), a));
+            ui_icon(ICON_NOTE, sx + 25, sy + 39, 24, soft);
         }
-        if (song >= 0 && lib.songs[song].duration_ms) {
-            float p = fminf(1.0f, (float)player_position_ms() / lib.songs[song].duration_ms);
-            gfx_rect(cx, cy + cs + 38, cs, 5, color_alpha(HEX(0xC8C8CE, 255), a));
-            gfx_rect(cx, cy + cs + 38, cs * p, 5, color_alpha(HEX(0x2E78DC, 255), a));
+        if (s) {
+            int total, at = player_index(&total);
+            char pos[24];
+            snprintf(pos, sizeof(pos), "%d of %d", at + 1, total);
+            font_draw(f_tiny, sx + 74, sy + 30, pos, soft, 0);
+            font_draw_fit(f_small_b, sx + 74, sy + 46, song_title(s), ink, sw - 80);
+            font_draw_fit(f_tiny, sx + 74, sy + 60, song_artist(s), soft, sw - 80);
+            float p = s->duration_ms ? fminf(1.0f, (float)player_position_ms() / s->duration_ms) : 0;
+            gfx_rect(sx + 8, sy + 88, sw - 16, 6, color_alpha(HEX(0xD2D2D8, 255), a));
+            gfx_rect(sx + 8, sy + 88, (sw - 16) * p, 6, color_alpha(HEX(0x2E78DC, 255), a));
+            char el[16], left[20];
+            ui_format_time(el, sizeof(el), player_position_ms());
+            left[0] = '-';
+            ui_format_time(left + 1, sizeof(left) - 1, s->duration_ms > player_position_ms() ? s->duration_ms - player_position_ms() : 0);
+            font_draw(f_tiny, sx + 8, sy + 106, el, ink, 0);
+            font_draw_right(f_tiny, sx + sw - 8, sy + 106, left, ink);
+        } else {
+            font_draw(f_small_b, sx + 74, sy + 46, "Not playing", ink, 0);
         }
         return;
     }
-    // FL/AC: the cover's colors, soft and dark, with the cover itself on the right.
-    if (t) {
-        float sw = t->w * 0.5f, sh = sw * SCREEN_H / SCREEN_W;
-        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
-        gfx_rect(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x3C2819, 90), a));
-        gfx_tex(t, 330, 44, 124, 124, tint);
-    } else {
-        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x4A3020, 255), a),
-                     color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x1E1814, 255), a));
+    // FL/AC: the cover with a soft shadow, the mark beneath.
+    const float cx = 358, cy = 40, cs = 100;
+    gfx_nine(t_shadow14, 32, cx - 18, cy - 14, cs + 36, cs + 36, color_alpha(HEX(0x000000, 140), a));
+    if (t) gfx_tex(t, cx, cy, cs, cs, tint);
+    else {
+        gfx_nine(t_fill8, 8, cx, cy, cs, cs, color_alpha(HEX(0x2A2630, 255), a));
+        ui_icon(ICON_NOTE, cx + 34, cy + 34, 32, color_alpha(MUTED, a));
     }
-    float x = 360;
-    x = font_draw(f_mid, x, 38, "FL", color_alpha(TEXT, a), 0);
-    x = font_draw(f_mid, x, 38, "/", color_alpha(ACCENT, a), 0);
-    font_draw(f_mid, x, 38, "AC", color_alpha(TEXT, a), 0);
+    float w = font_width(f_mid, "FL/AC", 0), x = cx + cs / 2 - w / 2;
+    x = font_draw(f_mid, x, 160, "FL", color_alpha(TEXT, a), 0);
+    x = font_draw(f_mid, x, 160, "/", color_alpha(ACCENT, a), 0);
+    font_draw(f_mid, x, 160, "AC", color_alpha(TEXT, a), 0);
 }
 
 static void draw_back(int tile, float a)
@@ -591,6 +641,7 @@ static void stream_draw(void)
     gfx_gradient(0, 0, SCREEN_W, SCREEN_H, HEX(0x0B0C10, 235), HEX(0x0B0C10, 70), HEX(0x0B0C10, 235), HEX(0x0B0C10, 70));
     gfx_gradient(0, 130, SCREEN_W, SCREEN_H - 130, HEX(0x0B0C10, 0), HEX(0x0B0C10, 0), HEX(0x0B0C10, 255), HEX(0x0B0C10, 255));
     gfx_rect(0, 0, SCREEN_W, 34, HEX(0x0B0C10, 60));
+    if (back_k[SEL_MUSIC] > 0.01f) music_front(back_k[SEL_MUSIC]);
     draw_status();
     stream_hero();
     stream_tiles();
