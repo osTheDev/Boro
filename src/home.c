@@ -533,14 +533,17 @@ static void draw_back(int tile, float a)
         music_back(a);
         return;
     }
+    // Video and Books: the picture is small, so it only tints the backdrop
+    // (dimmed, so the blur reads as color) and a sharp card sits on top.
+    u32 soft = color_alpha(HEX(0x707070, 255), a);
     if (tile == SEL_VIDEO && vlib_continue() >= 0 && (t = vlib_thumb(vlib_continue()))) {
-        gfx_tex(t, 0, 0, SCREEN_W, SCREEN_H, tint);
+        gfx_tex(t, 0, 0, SCREEN_W, SCREEN_H, soft);
         return;
     }
     if (tile == SEL_BOOKS && blib_current() >= 0 && books[blib_current()].cover[0] &&
         (t = art_get_file(books[blib_current()].cover, ART_LARGE))) {
         float sw = t->w * 0.8f, sh = sw * SCREEN_H / SCREEN_W;
-        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
+        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, soft);
         return;
     }
     if (tile == SEL_GAMES && glib_last_game() >= 0 && glib_last_game() == pic_for && pic_tex) {
@@ -555,6 +558,36 @@ static void draw_back(int tile, float a)
     gfx_gradient(0, 0, SCREEN_W, SCREEN_H, c1, c0, c1, c1);
 }
 
+// Sharp card for Video (the paused episode's frame) and Books (the whole
+// cover), drawn over the shading between the clock row and the tiles.
+static int card_shown(int tile)
+{
+    if (tile == SEL_VIDEO) return vlib_continue() >= 0 && vlib_thumb(vlib_continue());
+    if (tile == SEL_BOOKS) return blib_current() >= 0 && books[blib_current()].cover[0];
+    return 0;
+}
+
+static void card_front(int tile, float a)
+{
+    u32 tint = color_alpha(0xFFFFFFFF, a);
+    const Texture *t = NULL;
+    float x, y, w, h;
+    if (tile == SEL_VIDEO) {
+        if (vlib_continue() < 0 || !(t = vlib_thumb(vlib_continue()))) return;
+        w = 176, h = 99, x = SCREEN_W - 16 - w, y = 46;
+    } else if (tile == SEL_BOOKS) {
+        if (blib_current() < 0 || !books[blib_current()].cover[0]) return;
+        if (!(t = art_get_file(books[blib_current()].cover, ART_COVER_L))) return;
+        h = 112, w = h * t->w / (float)t->h;
+        if (w > 150) w = 150, h = w * t->h / (float)t->w;
+        x = SCREEN_W - 40 - w, y = 40 + (112 - h) / 2;
+    } else return;
+    gfx_filter(1);
+    for (int i = 1; i <= 4; i++) gfx_rect(x - i + 3, y - i + 5, w + i * 2, h + i * 2, color_alpha(HEX(0x000000, 34), a));
+    gfx_tex(t, x, y, w, h, tint);
+    gfx_rect(x, y, w, 1, color_alpha(HEX(0xFFFFFF, 50), a));
+}
+
 static void stream_hero(void)
 {
     int tile = sel == SEL_STATS ? last_tile : sel;
@@ -562,7 +595,7 @@ static void stream_hero(void)
     hero_of(tile, &h);
     float y = 60;
     font_draw(f_tiny, PAD, y, h.label, ACCENT, 1);
-    float max_w = tile == SEL_MUSIC ? 236 : 300; // the music skins draw on the right
+    float max_w = tile == SEL_MUSIC ? 236 : tile == SEL_VIDEO && card_shown(tile) ? 254 : 300; // art on the right
     font_draw_fit(f_title, PAD, y + 26, h.title, TEXT, max_w);
     font_draw_fit(f_small, PAD, y + 44, h.sub, MUTED, max_w);
     if (h.progress >= 0) {
@@ -642,6 +675,8 @@ static void stream_draw(void)
     gfx_gradient(0, 130, SCREEN_W, SCREEN_H - 130, HEX(0x0B0C10, 0), HEX(0x0B0C10, 0), HEX(0x0B0C10, 255), HEX(0x0B0C10, 255));
     gfx_rect(0, 0, SCREEN_W, 34, HEX(0x0B0C10, 60));
     if (back_k[SEL_MUSIC] > 0.01f) music_front(back_k[SEL_MUSIC]);
+    if (back_k[SEL_VIDEO] > 0.01f) card_front(SEL_VIDEO, back_k[SEL_VIDEO]);
+    if (back_k[SEL_BOOKS] > 0.01f) card_front(SEL_BOOKS, back_k[SEL_BOOKS]);
     draw_status();
     stream_hero();
     stream_tiles();

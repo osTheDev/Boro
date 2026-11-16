@@ -13,45 +13,38 @@
 #include "settings.h"
 #include "ui.h"
 
-#define WOOD HEX(0x3A2418, 255)
-#define WOOD2 HEX(0x543622, 255)
-#define DARKW HEX(0x24160F, 255)
-#define PAPER HEX(0xF0E6D0, 255)
-#define PAPER2 HEX(0xE2D4B8, 255)
-#define INK HEX(0x34261C, 255)
-#define FADE HEX(0x826E5A, 255)
-#define BRASS HEX(0xC8A050, 255)
-#define RED HEX(0x962828, 255)
-#define RULE HEX(0xCDBEA5, 255)
-#define TRACK_BG HEX(0xD2C4AA, 255)
+#define BG HEX(0x161311, 255)
+#define CARD HEX(0x2C2622, 255)
+#define WARM HEX(0xE8BE78, 255)
+#define TEXT HEX(0xF4EEE6, 255)
+#define MUTED HEX(0xA89C8E, 255)
+#define DIM HEX(0x6E645A, 255)
+#define RIBBON HEX(0xC8463C, 255)
+#define TRACK_BG HEX(0x463E38, 255)
+#define SHELF HEX(0x40322A, 255)
 
 enum { V_SHELF, V_CARD, V_NOW, V_CONTENTS };
 enum { TAB_SHELF, TAB_FINISHED };
 
 static int inited, view = V_SHELF, contents_from = V_CARD;
-static int tab, sort_title, sel, scroll, page = -1, button, c_sel, c_scroll;
+static int tab, sort_title, sel, page = -1, button, c_sel, c_scroll;
 static int list[1024], list_n;
-static Font *f_head, *f_title, *f_bold, *f_text, *f_small, *f_tiny;
+static Font *f_head, *f_title, *f_label, *f_text, *f_small, *f_value, *f_button;
 static Texture *t_glow;
-static u32 grain[96];
-static float t_now;
+static float t_now, grow = 1, shelf_x; // grow: the hovered book turning to its cover
+static u32 spine_col[1024];             // from each cover, 0 until it loads
 
 static void init(void)
 {
     inited = 1;
     f_head = ui_font(FAMILY_SERIF, 700, 22);
-    f_title = ui_font(FAMILY_SERIF, 700, 15);
-    f_bold = ui_font(FAMILY_SERIF, 700, 12);
-    f_text = ui_font(FAMILY_SERIF, 400, 12);
-    f_small = ui_font(FAMILY_SERIF, 400, 11);
-    f_tiny = ui_font(FAMILY_SERIF, 400, 10);
+    f_title = ui_font(FAMILY_SERIF, 700, 18);
+    f_label = ui_font(FAMILY_SORA, 700, 8);
+    f_text = ui_font(FAMILY_MANROPE, 500, 11);
+    f_small = ui_font(FAMILY_MANROPE, 500, 10);
+    f_value = ui_font(FAMILY_SORA, 700, 13);
+    f_button = ui_font(FAMILY_MANROPE, 700, 11);
     t_glow = tex_glow(128);
-    u32 seed = 7;
-    for (int i = 0; i < 96; i++) {
-        seed = seed * 1103515245u + 12345u;
-        int v = (int)((seed >> 16) % 13) - 6;
-        grain[i] = RGBA(0x3A + v, 0x24 + v, 0x18 + v, 255);
-    }
 }
 
 // ---- Lists ------------------------------------------------------------------------
@@ -69,9 +62,8 @@ static int cmp_books(const void *a, const void *b)
 static void build(void)
 {
     list_n = 0;
-    int current = tab == TAB_SHELF ? blib_current() : -1;
     for (int i = 0; i < book_count && list_n < 1024; i++)
-        if (books[i].finished == (tab == TAB_FINISHED) && i != current) list[list_n++] = i;
+        if (books[i].finished == (tab == TAB_FINISHED)) list[list_n++] = i;
     qsort(list, list_n, sizeof(int), cmp_books);
     if (sel >= list_n) sel = list_n ? list_n - 1 : 0;
 }
@@ -81,7 +73,9 @@ void books_enter(void)
     if (!inited) init();
     blib_scan();
     view = V_SHELF;
-    sel = scroll = 0;
+    sel = 0;
+    shelf_x = 0;
+    grow = 1;
     if (blib_ready()) build();
 }
 
@@ -101,15 +95,6 @@ void books_enter_now(void)
 }
 
 // ---- Helpers ------------------------------------------------------------------------
-
-static void roman(char *out, int size, int n)
-{
-    static const int val[] = { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
-    static const char *const sym[] = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
-    out[0] = 0;
-    for (int i = 0; i < 13 && n > 0; i++)
-        while (n >= val[i] && (int)strlen(out) + 3 < size) { strcat(out, sym[i]); n -= val[i]; }
-}
 
 static void format_len(char *out, int size, u32 ms)
 {
@@ -132,18 +117,17 @@ static int now_track(int b, u32 *ms)
     return books[b].pos_track;
 }
 
-static void wood(void)
+static void lamp(void)
 {
-    for (int i = 0; i < 96; i++) gfx_rect(0, i * 3, SCREEN_W, 3, grain[i]);
     gfx_additive(1);
-    gfx_tex(t_glow, 380 - 260, -180, 520, 360, HEX(0xFFD68C, 40));
+    gfx_tex(t_glow, 360 - 230, -150, 460, 300, HEX(0xFFBE78, 34));
     gfx_additive(0);
 }
 
-static void bar(float x, float y, float w, float p, u32 fill, u32 bg)
+static void bar(float x, float y, float w, float p, u32 fill)
 {
-    gfx_rect(x, y, w, 3, bg);
-    gfx_rect(x, y, w * p, 3, fill);
+    ui_rrect(x, y, w, 3, 1.5f, TRACK_BG);
+    if (p > 0) ui_rrect(x, y, fmaxf(3, w * p), 3, 1.5f, fill);
 }
 
 // The cover's own shape (width over height); 2:3 until it loads or without one.
@@ -163,6 +147,8 @@ static void cover_fit(int b, int kind, float max_w, float max_h, float *w, float
     if (*w > max_w) { *w = max_w; *h = max_w / a; }
 }
 
+static void placeholder(int b, u32 *c0, u32 *c1) { ui_placeholder_colors(b * 7 + 3, c0, c1); }
+
 static void cover(int b, float x, float y, float w, float h, int kind)
 {
     const Book *bk = &books[b];
@@ -171,16 +157,29 @@ static void cover(int b, float x, float y, float w, float h, int kind)
         gfx_filter(1);
         gfx_tex(t, x, y, w, h, 0xFFFFFFFF); // the whole cover, never cropped
     } else {
-        // A cloth binding with the title stamped on.
         u32 c0, c1;
-        ui_placeholder_colors(b * 7 + 3, &c0, &c1);
-        gfx_gradient(x, y, w, h, c0, c0, c1, c1);
-        gfx_rect(x + 4, y + h * 0.18f, w - 8, 1, BRASS);
-        gfx_rect(x + 4, y + h * 0.82f, w - 8, 1, BRASS);
-        Font *f = w > 100 ? f_title : f_tiny;
-        font_draw_fit(f, x + 6, y + h / 2 + 4, bk->title, PAPER, w - 12);
+        placeholder(b, &c0, &c1);
+        ui_rrect(x, y, w, h, 3, c0);
+        gfx_gradient(x, y + h * 0.5f, w, h * 0.5f, color_alpha(c1, 0), color_alpha(c1, 0), c1, c1);
+        Font *f = w > 100 ? f_title : f_small;
+        font_draw_fit(f, x + 6, y + h * 0.3f, bk->title, TEXT, w - 12);
     }
-    if (!bk->finished && bk->last[0]) gfx_rect(x + w - 12, y, 6, h > 100 ? 28 : 16, RED); // bookmark ribbon
+    if (!bk->finished && bk->last[0]) gfx_rect(x + w - 12, y, 6, h > 100 ? 26 : 16, RIBBON); // bookmark ribbon
+}
+
+// A soft, dim wash of the cover behind a page.
+static void cover_wash(int b, float a)
+{
+    const Texture *t = books[b].cover[0] ? art_get_file(books[b].cover, ART_COVER_S) : NULL;
+    if (t) {
+        gfx_filter(1);
+        gfx_tex_part(t, t->w * 0.2f, t->h * 0.2f, t->w * 0.6f, t->h * 0.6f, 0, 0, SCREEN_W, SCREEN_H, color_alpha(0xFFFFFFFF, a));
+    } else {
+        u32 c0, c1;
+        placeholder(b, &c0, &c1);
+        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(c0, a), color_alpha(c1, a), color_alpha(c1, a), color_alpha(c0, a));
+    }
+    gfx_gradient(0, 0, SCREEN_W, SCREEN_H, HEX(0x161311, 150), HEX(0x161311, 110), HEX(0x161311, 220), HEX(0x161311, 200));
 }
 
 static void hints_bar(const int *glyph, const char *const *label, int n, float y)
@@ -188,124 +187,172 @@ static void hints_bar(const int *glyph, const char *const *label, int n, float y
     float x = SCREEN_W - 12;
     for (int i = n - 1; i >= 0; i--) {
         if (glyph[i] < 0) {
-            x -= font_width(f_tiny, label[i], 0);
-            font_draw(f_tiny, x, y, label[i], PAPER2, 0);
+            x -= font_width(f_small, label[i], 0);
+            font_draw(f_small, x, y, label[i], MUTED, 0);
         } else {
-            x -= ui_hint_width(f_tiny, glyph[i], label[i]);
-            ui_hint(f_tiny, x, y, glyph[i], label[i], PAPER2);
+            x -= ui_hint_width(f_small, glyph[i], label[i]);
+            ui_hint(f_small, x, y, glyph[i], label[i], MUTED);
         }
         x -= 12;
     }
 }
 
+static void pill(float x, float y, const char *label, int on, int filled)
+{
+    float w = font_width(f_button, label, 0) + 28;
+    if (filled) ui_rrect(x, y, w, 24, 12, on ? WARM : CARD);
+    else {
+        ui_rrect(x, y, w, 24, 12, on ? HEX(0x4A3E34, 255) : CARD);
+        if (on) ui_ring(x, y, w, 24, 12, WARM);
+    }
+    font_draw(f_button, x + 14, y + 16, label, filled && on ? BG : TEXT, 0);
+}
+
+static float pill_w(const char *label) { return font_width(f_button, label, 0) + 28; }
+
 // ---- Shelf --------------------------------------------------------------------------
+
+#define FLOOR 226
+#define COVER_H 114
 
 static void shelf_update(u32 p, u32 nav)
 {
     if (!blib_ready()) return;
-    if (p & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) { tab ^= 1; sel = scroll = 0; build(); }
+    int old = sel;
+    if (p & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) { tab ^= 1; sel = 0; shelf_x = 0; build(); }
     if (p & PSP_CTRL_SQUARE) { sort_title ^= 1; build(); }
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
     if (nav & PSP_CTRL_RIGHT && sel < list_n - 1) sel++;
-    if (sel < scroll) scroll = sel;
-    int current = tab == TAB_SHELF ? blib_current() : -1;
+    if (sel != old) grow = 0;
+    int current = blib_current();
     if (p & PSP_CTRL_TRIANGLE && current >= 0) {
         if (blib_playing() != current) blib_play(current);
         open_now(current);
     }
-    if (p & PSP_CTRL_UP && current >= 0) { page = current; button = 0; view = V_CARD; }
     if (p & PSP_CTRL_CROSS && list_n) { page = list[sel]; button = 0; view = V_CARD; }
 }
 
-static void now_reading(int b)
+// Each book's spine: a steady size from its place, a color from its cover.
+static void spine_size(int b, float *w, float *h)
 {
-    float x = 12, y = 38, w = 456, h = 66;
-    gfx_rect(x, y, w, h, PAPER);
-    gfx_rect(x, y, w, 14, PAPER2);
-    font_draw(f_bold, x + 8, y + 11, "NOW READING", RED, 1);
-    u32 ms;
-    int t = now_track(b, &ms);
-    char ch[48], left[48];
-    snprintf(ch, sizeof(ch), "Ch %d of %d", t + 1, books[b].track_count);
-    font_draw_right(f_bold, x + w - 8, y + 11, ch, INK);
-    for (float ly = y + 26; ly < y + h; ly += 12) gfx_rect(x + 98, ly, w - 106, 1, RULE);
-    float cw, chh;
-    cover_fit(b, ART_COVER_S, 48, 46, &cw, &chh);
-    cover(b, x + 8 + (48 - cw) / 2, y + 17 + (46 - chh), cw, chh, ART_COVER_S);
-    font_draw_fit(f_title, x + 64, y + 31, books[b].title, INK, 300);
-    font_draw_fit(f_text, x + 64, y + 46, books[b].author[0] ? books[b].author : "Unknown author", FADE, 300);
-    format_len(left, sizeof(left), books[b].total_ms - blib_elapsed(b));
-    strcat(left, " left");
-    bar(x + 64, y + 54, 280, progress(b), RED, TRACK_BG);
-    font_draw(f_tiny, x + 352, y + 58, left, INK, 0);
+    u32 k = (u32)b * 2654435761u;
+    *w = 16 + (k >> 8) % 5 * 2;
+    *h = 88 + (k >> 16) % 5 * 6;
+}
+
+static u32 spine_color(int b)
+{
+    if (b < 1024 && spine_col[b]) return spine_col[b];
+    const Texture *t = books[b].cover[0] ? art_get_file(books[b].cover, ART_COVER_S) : NULL;
+    if (t && t->px && !t->alpha8) {
+        u32 r = 0, g = 0, bl = 0, n = 0;
+        for (int y = t->h / 8; y < t->h; y += t->h / 4 + 1)
+            for (int x = t->w / 8; x < t->w; x += t->w / 4 + 1) {
+                u32 c = t->px[y * t->tw + x];
+                r += c & 0xFF; g += (c >> 8) & 0xFF; bl += (c >> 16) & 0xFF; n++;
+            }
+        if (n) {
+            u32 c = RGBA(r / n * 4 / 5, g / n * 4 / 5, bl / n * 4 / 5, 255);
+            if (b < 1024) spine_col[b] = c;
+            return c;
+        }
+    }
+    u32 c0, c1;
+    placeholder(b, &c0, &c1);
+    return c0;
+}
+
+static void spine(int b, float x, float w, float h)
+{
+    u32 c = spine_color(b), y = FLOOR - h;
+    ui_rrect(x, y, w, h, 2, c);
+    gfx_rect(x + w - 3, y + 1, 3, h - 1, color_lerp(c, BG, 0.4f));
+    u32 band = color_lerp(c, TEXT, 0.3f);
+    gfx_rect(x + 2, y + 10, w - 6, 2, band);
+    gfx_rect(x + 2, FLOOR - 14, w - 6, 2, band);
+    if (!books[b].finished && books[b].last[0]) gfx_rect(x + w / 2 - 2, y - 6, 4, 12, RIBBON);
 }
 
 static void shelf_draw(void)
 {
-    font_draw(f_head, 14, 28, "Boro Library", PAPER, 0);
-    float tx = 160;
+    font_draw(f_head, 16, 28, "Library", TEXT, 0);
+    float tx = 110;
     static const char *const tabs[2] = { "Shelf", "Finished" };
     for (int i = 0; i < 2; i++) {
-        font_draw(f_text, tx, 26, tabs[i], i == tab ? PAPER : FADE, 0);
+        font_draw(f_text, tx, 26, tabs[i], i == tab ? TEXT : DIM, 0);
         float tw = font_width(f_text, tabs[i], 0);
-        if (i == tab) gfx_rect(tx, 30, tw, 2, BRASS);
-        tx += tw + 16;
+        if (i == tab) ui_rrect(tx, 30, tw, 2, 1, WARM);
+        tx += tw + 14;
     }
-    ui_battery(f_tiny, SCREEN_W - 12, 18, PAPER2);
+    ui_battery(f_small, SCREEN_W - 12, 18, MUTED);
     if (!blib_ready()) {
-        font_draw_center(f_title, SCREEN_W / 2, 140, "Dusting off the shelves\xE2\x80\xA6", PAPER);
+        font_draw_center(f_title, SCREEN_W / 2, 140, "Dusting off the shelves\xE2\x80\xA6", TEXT);
         return;
     }
     if (!book_count) {
-        gfx_rect(60, 70, 360, 120, PAPER);
-        gfx_rect(60, 70, 360, 16, PAPER2);
-        font_draw(f_bold, 68, 82, "LIBRARY NOTICE", RED, 1);
-        font_draw_center(f_head, SCREEN_W / 2, 118, "No books yet", INK);
+        ui_rrect(70, 76, 340, 110, 12, CARD);
+        font_draw_center(f_head, SCREEN_W / 2, 114, "No books yet", TEXT);
         char line[128];
         snprintf(line, sizeof(line), "Copy each book into its own folder in %s/", blib_dir());
-        font_draw_center(f_text, SCREEN_W / 2, 142, line, INK);
-        font_draw_center(f_small, SCREEN_W / 2, 160, "MP3 or M4B. Files play in name order. Add cover.jpg for the art.", FADE);
+        font_draw_center(f_text, SCREEN_W / 2, 140, line, MUTED);
+        font_draw_center(f_small, SCREEN_W / 2, 158, "MP3 or M4B. Files play in name order. Add cover.jpg for the art.", DIM);
         return;
     }
-    int current = tab == TAB_SHELF ? blib_current() : -1;
-    if (current >= 0) now_reading(current);
-    float top = current >= 0 ? 118 : 50;
     if (!list_n) {
-        font_draw_center(f_text, SCREEN_W / 2, top + 40, tab == TAB_FINISHED ? "Finished books will rest here." : "Every book is on the go or finished.", PAPER2);
-    }
-    // Covers stand at their own shapes; scroll so the picked one shows.
-    float ax = 0;
-    for (;;) {
-        float x = 14;
-        for (int i = scroll; i < sel; i++) x += cover_aspect(list[i], ART_COVER_S) * 68 + 10;
-        if (sel > scroll && x + cover_aspect(list[sel], ART_COVER_S) * 74 > SCREEN_W - 14) scroll++;
-        else break;
-    }
-    for (int i = scroll, x0 = 14; i < list_n && x0 < SCREEN_W; i++) {
-        int on = i == sel;
-        float h = on ? 74 : 68, w = cover_aspect(list[i], ART_COVER_S) * h, x = x0, y = top + (74 - h) - (on ? 6 : 0);
-        if (on) { ui_ring(x - 3, y - 3, w + 6, h + 6, 2, BRASS); ax = x + w / 2; }
-        cover(list[i], x, y, w, h, ART_COVER_S);
-        if (books[list[i]].finished) {
-            gfx_rect(x + w - 26, y + 4, 24, 11, RED);
-            font_draw(f_tiny, x + w - 24, y + 13, "READ", PAPER, 0);
-        }
-        x0 = (int)(x + w + 10);
-    }
-    gfx_rect(0, top + 74, SCREEN_W, 10, WOOD2);
-    gfx_rect(0, top + 74, SCREEN_W, 1, HEX(0x785032, 255));
-    gfx_rect(0, top + 84, SCREEN_W, 4, DARKW);
-    if (list_n) {
+        font_draw_center(f_text, SCREEN_W / 2, 140, tab == TAB_FINISHED ? "Finished books will rest here." : "Every book here is finished.", MUTED);
+    } else {
+        // About the book you're on.
         int b = list[sel];
-        ui_triangle(ax - 2, top + 89, UI_UP, BRASS);
-        char info[200], len[32];
-        format_len(len, sizeof(len), books[b].total_ms);
-        if (books[b].finished) snprintf(info, sizeof(info), "%s \xC2\xB7 %s \xC2\xB7 finished", books[b].author[0] ? books[b].author : "Unknown author", len);
-        else if (books[b].last[0]) snprintf(info, sizeof(info), "%s \xC2\xB7 %d%% read", books[b].author[0] ? books[b].author : "Unknown author", (int)(progress(b) * 100));
-        else snprintf(info, sizeof(info), "%s \xC2\xB7 %s", books[b].author[0] ? books[b].author : "Unknown author", len);
-        font_draw_fit(f_title, 14, top + 114, books[b].title, PAPER, 452);
-        font_draw_fit(f_text, 14, top + 130, info, FADE, 452);
+        const Book *bk = &books[b];
+        const char *label = bk->finished ? "FINISHED" : bk->last[0] ? (b == blib_current() ? "CONTINUE" : "IN PROGRESS") : "NEXT UP";
+        font_draw(f_label, 16, 48, label, WARM, 1);
+        font_draw_fit(f_title, 16, 68, bk->title, TEXT, 448);
+        char line[200], len[32];
+        int t = bk->finished ? 0 : bk->pos_track;
+        snprintf(line, sizeof(line), "%s \xC2\xB7 Ch %d of %d", bk->author[0] ? bk->author : "Unknown author", t + 1, bk->track_count);
+        font_draw_fit(f_text, 16, 84, line, MUTED, 448);
+        float p = progress(b);
+        bar(16, 93, 170, p, WARM);
+        format_len(len, sizeof(len), bk->finished ? bk->total_ms : bk->total_ms - blib_elapsed(b));
+        if (bk->finished) snprintf(line, sizeof(line), "Finished \xC2\xB7 %s", len);
+        else snprintf(line, sizeof(line), "%d%% \xC2\xB7 %s left", (int)(p * 100), len);
+        font_draw(f_small, 194, 98, line, MUTED, 0);
+
+        // The shelf: spines, with the book you're on grown into its cover.
+        float k = grow * grow * (3 - 2 * grow);
+        float cw = cover_aspect(b, ART_COVER_S) * COVER_H, sw, sh;
+        // Scroll so the book you're on stays in view.
+        float x = 0, at = 0;
+        for (int i = 0; i < list_n; i++) {
+            spine_size(list[i], &sw, &sh);
+            if (i == sel) { at = x; x += sw + (cw - sw) * k + 6; }
+            else x += sw + 3;
+        }
+        float want = shelf_x;
+        if (at - want < 0) want = at;
+        if (at - want + cw + 32 > SCREEN_W - 16) want = at + cw + 32 - (SCREEN_W - 16);
+        shelf_x += (want - shelf_x) * 0.25f;
+        x = 16 - shelf_x;
+        for (int i = 0; i < list_n && x < SCREEN_W; i++) {
+            int bi = list[i];
+            spine_size(bi, &sw, &sh);
+            if (i == sel) {
+                float w = sw + (cw - sw) * k, h = sh + (COVER_H - sh) * k;
+                if (x + w > 0) {
+                    ui_shadow(x + 4, FLOOR - h + 6, w, h, 4, 8, RGBA(0, 0, 0, 150));
+                    cover(bi, x, FLOOR - h, w, h, ART_COVER_S);
+                    ui_ring(x - 2, FLOOR - h - 2, w + 4, h + 4, 4, color_alpha(WARM, k));
+                }
+                x += w + 6;
+            } else {
+                if (x + sw > 0) spine(bi, x, sw, sh);
+                x += sw + 3;
+            }
+        }
     }
+    ui_rrect(8, FLOOR, SCREEN_W - 16, 6, 2, SHELF);
+    gfx_rect(8, FLOOR + 6, SCREEN_W - 16, 3, HEX(0x1E1814, 255));
+    int current = blib_current();
     static const int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, -1, ICON_CIRCLE };
     const char *l[] = { "Open", "Continue", sort_title ? "Sort: Title" : "Sort: Recent", "L/R Shelf", "Back" };
     if (current >= 0) hints_bar(g, l, 5, 264);
@@ -344,61 +391,50 @@ static void card_update(u32 p)
 static void card_draw(void)
 {
     const Book *b = &books[page];
+    cover_wash(page, 0.5f);
     char crumb[160];
     snprintf(crumb, sizeof(crumb), "Library \xE2\x80\xBA %s", b->title);
-    font_draw_fit(f_text, 14, 20, crumb, FADE, 360);
-    ui_battery(f_tiny, SCREEN_W - 12, 16, PAPER2);
-    float cw, chh;
-    cover_fit(page, ART_COVER_L, 130, 196, &cw, &chh);
-    cover(page, 14 + (130 - cw) / 2, 36, cw, chh, ART_COVER_L);
+    font_draw_fit(f_small, 16, 20, crumb, MUTED, 360);
+    ui_battery(f_small, SCREEN_W - 12, 16, MUTED);
+    float cw, ch;
+    cover_fit(page, ART_COVER_L, 112, 168, &cw, &ch);
+    float cx = 16 + (112 - cw) / 2;
+    ui_shadow(cx + 4, 40, cw, ch, 6, 10, RGBA(0, 0, 0, 170));
+    cover(page, cx, 34, cw, ch, ART_COVER_L);
 
-    float x = 152, y = 34, w = 314;
-    gfx_rect(x, y, w, 200, PAPER);
-    gfx_rect(x, y, w, 16, PAPER2);
-    font_draw(f_bold, x + 8, y + 12, "CATALOG CARD", RED, 1);
-    char no[16];
-    snprintf(no, sizeof(no), "No. %04d", page + 1);
-    font_draw_right(f_bold, x + w - 8, y + 12, no, INK);
-    font_draw_fit(f_head, x + 8, y + 42, b->title, INK, w - 16);
-    font_draw_fit(f_text, x + 8, y + 58, b->author[0] ? b->author : "Unknown author", FADE, w - 16);
+    float x = 148, w = SCREEN_W - 16 - x;
+    font_draw_fit(f_head, x, 58, b->title, TEXT, w);
+    font_draw_fit(f_text, x, 76, b->author[0] ? b->author : "Unknown author", MUTED, w);
 
-    char len[32], v[4][120], left[32];
+    char v[4][40], len[32], left[32];
     format_len(len, sizeof(len), b->total_ms);
-    snprintf(v[0], sizeof(v[0]), "%s \xC2\xB7 %d %s", len, b->track_count, b->track_count == 1 ? "part" : "chapters");
-    format_len(left, sizeof(left), b->total_ms - blib_elapsed(page));
-    if (b->finished) snprintf(v[1], sizeof(v[1]), "Finished");
-    else if (!b->last[0]) snprintf(v[1], sizeof(v[1]), "Not started");
-    else snprintf(v[1], sizeof(v[1]), "%d%% \xC2\xB7 %s left", (int)(progress(page) * 100), left);
-    if (b->last[0]) {
-        char when[32];
-        glib_format_last(when, sizeof(when), b->last);
-        snprintf(v[2], sizeof(v[2]), "%s, Ch %d", when, b->pos_track + 1);
-    } else {
-        snprintf(v[2], sizeof(v[2]), "Never");
-    }
-    const char *cv = !b->cover[0] ? "no cover" : strstr(b->cover, "/bookart/") ? "art from the MP3" : strrchr(b->cover, '/') + 1;
-    const char *fmt = b->tracks[0].kind == BOOK_M4B ? (strcmp(b->tracks[0].path, b->tracks[b->track_count - 1].path) ? "M4B files" : "M4B file")
-                      : b->track_count > 1 || strcasecmp(b->dir + strlen(b->dir) - 4, ".mp3") ? "MP3 folder" : "MP3 file";
-    snprintf(v[3], sizeof(v[3]), "%s \xC2\xB7 %s", fmt, cv);
-    static const char *const keys[4] = { "Length", "Progress", "Last read", "Format" };
+    snprintf(v[0], sizeof(v[0]), "%s", len);
+    snprintf(v[1], sizeof(v[1]), "%d", b->track_count);
+    if (b->finished) snprintf(v[2], sizeof(v[2]), "Done");
+    else snprintf(v[2], sizeof(v[2]), "%d%%", (int)(progress(page) * 100));
+    if (b->last[0]) glib_format_last(v[3], sizeof(v[3]), b->last);
+    else snprintf(v[3], sizeof(v[3]), "Never");
+    static const char *const keys[4] = { "LENGTH", "CHAPTERS", "PROGRESS", "LAST" };
     for (int i = 0; i < 4; i++) {
-        float ry = y + 70 + i * 20;
-        gfx_rect(x + 8, ry + 16, w - 16, 1, RULE);
-        font_draw(f_bold, x + 8, ry + 12, keys[i], FADE, 0);
-        font_draw_fit(f_text, x + 88, ry + 12, v[i], INK, w - 96);
+        float bx = x + i * 80;
+        ui_rrect(bx, 92, 74, 36, 8, HEX(0x2C2622, 220));
+        font_draw(f_label, bx + 8, 104, keys[i], DIM, 1);
+        font_draw_fit(f_value, bx + 8, 122, v[i], TEXT, 62);
     }
+    bar(x, 142, w, b->finished ? 1 : progress(page), WARM);
+    format_len(left, sizeof(left), b->total_ms - blib_elapsed(page));
+    const char *cv = !b->cover[0] ? "no cover" : strstr(b->cover, "/bookart/") ? "cover from the file" : strrchr(b->cover, '/') + 1;
+    const char *fmt = b->tracks[0].kind == BOOK_M4B ? "M4B" : "MP3";
+    char line[160];
+    if (b->finished) snprintf(line, sizeof(line), "Finished \xC2\xB7 %s \xC2\xB7 %s", fmt, cv);
+    else snprintf(line, sizeof(line), "%s left \xC2\xB7 %s \xC2\xB7 %s", left, fmt, cv);
+    font_draw_fit(f_small, x, 158, line, MUTED, w);
+
     const char *labels[3] = { b->finished ? "Listen again" : b->last[0] ? "Continue" : "Start listening", "Contents", "Start over" };
-    float bx = x + 8;
+    float bx = x;
     for (int i = 0; i < 3; i++) {
-        float bw = font_width(f_bold, labels[i], 0) + 22;
-        if (i == button) {
-            gfx_rect(bx, y + 164, bw, 22, RED);
-        } else {
-            gfx_rect(bx, y + 164, bw, 22, PAPER2);
-            ui_ring(bx, y + 164, bw, 22, 0, HEX(0xB4A082, 255));
-        }
-        font_draw(f_bold, bx + 11, y + 179, labels[i], i == button ? PAPER : INK, 0);
-        bx += bw + 10;
+        pill(bx, 176, labels[i], i == button, 1);
+        bx += pill_w(labels[i]) + 8;
     }
     static const int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
     static const char *const l[] = { "Select", "Contents", "Back" };
@@ -462,78 +498,78 @@ static void now_draw(void)
 {
     int b = page, mine = blib_playing() == b && player_book_track() >= 0;
     const Book *bk = &books[b];
-    font_draw(f_text, 14, 20, "Now listening", FADE, 0);
-    ui_battery(f_tiny, SCREEN_W - 12, 16, PAPER2);
-    // The open book.
-    gfx_rect(20, 30, 440, 206, PAPER);
-    gfx_gradient(222, 30, 18, 206, HEX(0x785A3C, 0), HEX(0x785A3C, 60), HEX(0x785A3C, 0), HEX(0x785A3C, 60));
-    gfx_rect(240, 30, 2, 206, HEX(0xBEAC8C, 255));
-    float cw, chh;
-    cover_fit(b, ART_COVER_L, 170, 164, &cw, &chh);
-    cover(b, 121 - cw / 2, 38 + (164 - chh) / 2, cw, chh, ART_COVER_L);
-    font_draw_fit(f_title, 56, 210, bk->title, INK, 170);
-    font_draw_fit(f_small, 56, 224, bk->author, FADE, 170);
+    cover_wash(b, 0.45f);
+    font_draw(f_small, 16, 20, "Now listening", MUTED, 0);
+    ui_battery(f_small, SCREEN_W - 12, 16, MUTED);
+    float cw, ch;
+    cover_fit(b, ART_COVER_L, 128, 184, &cw, &ch);
+    float cx = 16 + (128 - cw) / 2, cy = 36 + (184 - ch) / 2;
+    ui_shadow(cx + 4, cy + 6, cw, ch, 6, 10, RGBA(0, 0, 0, 180));
+    cover(b, cx, cy, cw, ch, ART_COVER_L);
 
     u32 ms;
     int t = now_track(b, &ms);
-    char rn[24], label[40];
-    roman(rn, sizeof(rn), t + 1);
-    snprintf(label, sizeof(label), "CHAPTER %s", rn);
-    font_draw(f_bold, 258, 50, label, RED, 1);
-    font_draw_fit(f_title, 258, 68, bk->names[t], INK, 190);
+    float x = 164, w = SCREEN_W - 16 - x;
+    char label[40];
+    snprintf(label, sizeof(label), "CHAPTER %d OF %d", t + 1, bk->track_count);
+    font_draw(f_label, x, 46, label, WARM, 1);
+    font_draw_fit(f_title, x, 66, bk->names[t], TEXT, w);
+    char sub[200];
+    snprintf(sub, sizeof(sub), "%s%s%s", bk->title, bk->author[0] ? " \xC2\xB7 " : "", bk->author);
+    font_draw_fit(f_text, x, 82, sub, MUTED, w);
     u32 len = bk->tracks[t].duration_ms;
+    bar(x, 98, w, len ? fminf(1.0f, (float)ms / len) : 0, TEXT);
     char pos[16], rest[20];
     ui_format_time(pos, sizeof(pos), ms);
     rest[0] = '-';
     ui_format_time(rest + 1, sizeof(rest) - 1, len > ms ? len - ms : 0);
-    font_draw(f_tiny, 258, 88, pos, FADE, 0);
-    font_draw_right(f_tiny, 448, 88, rest, FADE);
-    bar(258, 94, 190, len ? fminf(1.0f, (float)ms / len) : 0, RED, TRACK_BG);
+    font_draw(f_small, x, 114, pos, MUTED, 0);
+    font_draw_right(f_small, x + w, 114, rest, MUTED);
 
-    float cx = 352, cy = 124;
-    font_draw_center(f_text, cx - 82, cy + 4, "-30s", FADE);
-    font_draw_center(f_text, cx + 82, cy + 4, "+30s", FADE);
-    ui_icon(ICON_PREV, cx - 52, cy - 8, 16, INK);
-    ui_icon(ICON_NEXT, cx + 36, cy - 8, 16, INK);
-    ui_rrect(cx - 15, cy - 15, 30, 30, 15, RED);
+    float mx = x + w / 2, my = 146;
     int playing_now = mine && !player_paused();
-    ui_icon(playing_now ? ICON_PAUSE : ICON_PLAY, cx - 8, cy - 8, 16, PAPER);
+    for (int s = -1; s <= 1; s += 2) {
+        float rx = mx + s * 104;
+        ui_ring(rx - 12, my - 12, 24, 24, 12, MUTED);
+        font_draw_center(f_label, rx, my + 3, "30", TEXT);
+        ui_triangle(rx + s * 10 - (s < 0 ? 4 : 0), my - 13, s < 0 ? UI_LEFT : UI_RIGHT, MUTED);
+    }
+    ui_icon(ICON_PREV, mx - 60, my - 8, 16, TEXT);
+    ui_icon(ICON_NEXT, mx + 44, my - 8, 16, TEXT);
+    ui_rrect(mx - 18, my - 18, 36, 36, 18, TEXT);
+    ui_icon(playing_now ? ICON_PAUSE : ICON_PLAY, mx - 8, my - 8, 16, BG);
+    if (!mine) font_draw_center(f_small, mx, my + 32, bk->last[0] ? "Paused here \xC2\xB7 press X to listen" : "Press X to start listening", MUTED);
 
-    if (!mine) font_draw_center(f_tiny, cx, cy + 26, bk->last[0] ? "Paused here \xC2\xB7 press X to listen" : "Press X to start listening", FADE);
-    // Speed and sleep tags.
+    // Speed, sleep and chapters chips.
     char sp[32], sl[32];
     float v = book_speeds[settings.book_speed];
-    if (v == (int)v) snprintf(sp, sizeof(sp), "Speed %d\xC3\x97", (int)v);
-    else snprintf(sp, sizeof(sp), "Speed %g\xC3\x97", v);
+    if (v == (int)v) snprintf(sp, sizeof(sp), "%d\xC3\x97", (int)v);
+    else snprintf(sp, sizeof(sp), "%g\xC3\x97", v);
     int sleep_min = settings_sleep_left();
-    if (sleep_min) snprintf(sl, sizeof(sl), "Sleep %d min", sleep_min);
+    if (sleep_min) snprintf(sl, sizeof(sl), "Sleep %dm", sleep_min);
     else snprintf(sl, sizeof(sl), "Sleep off");
-    float tx = 258;
-    const char *tags[2] = { sp, sl };
-    for (int i = 0; i < 2; i++) {
-        float tw = font_width(f_bold, tags[i], 0) + 18;
-        int on = i == 0 ? settings.book_speed != 0 : sleep_min != 0;
-        gfx_rect(tx, 156, tw, 20, on ? HEX(0xEAD9B0, 255) : PAPER2);
-        ui_ring(tx, 156, tw, 20, 0, on ? BRASS : HEX(0xB4A082, 255));
-        font_draw(f_bold, tx + 9, 170, tags[i], INK, 0);
-        tx += tw + 8;
-    }
-    font_draw(f_bold, 258, 196, "Book", FADE, 0);
+    float px = x;
+    pill(px, 186, sp, settings.book_speed != 0, 0);
+    px += pill_w(sp) + 8;
+    pill(px, 186, sl, sleep_min != 0, 0);
+    px += pill_w(sl) + 8;
+    pill(px, 186, "Chapters", 0, 0);
+
     float bp = bk->total_ms ? fminf(1.0f, (float)blib_elapsed(b) / bk->total_ms) : 0;
     if (mine && bk->total_ms) {
         u32 done = ms;
         for (int i = 0; i < t; i++) done += bk->tracks[i].duration_ms;
         bp = fminf(1.0f, (float)done / bk->total_ms);
     }
-    bar(292, 192, 156, bp, BRASS, TRACK_BG);
+    bar(x, 222, w, bp, WARM);
     char line[64], left[32];
     format_len(left, sizeof(left), (u32)(bk->total_ms * (1 - bp)));
-    snprintf(line, sizeof(line), "%d%% read \xC2\xB7 %s left \xC2\xB7 Ch %d of %d", (int)(bp * 100), left, t + 1, bk->track_count);
-    font_draw_fit(f_tiny, 258, 214, line, FADE, 190);
+    snprintf(line, sizeof(line), "%d%% of book \xC2\xB7 %s left", (int)(bp * 100), left);
+    font_draw(f_small, x, 238, line, MUTED, 0);
 
     static const int g[] = { -1, -1, ICON_TRIANGLE, ICON_SQUARE, -1, ICON_CROSS, ICON_CIRCLE };
-    const char *l[] = { "\xE2\x86\x90\xE2\x86\x92 30s", "L/R Chapter", "Contents", "Speed", "START Sleep", playing_now ? "Pause" : "Play", "Back" };
-    hints_bar(g, l, 7, 258);
+    const char *l[] = { "\xE2\x97\x80\xE2\x96\xB6 30s", "L/R Chapter", "Chapters", "Speed", "START Sleep", playing_now ? "Pause" : "Play", "Back" };
+    hints_bar(g, l, 7, 262);
 }
 
 // ---- Contents -----------------------------------------------------------------------------
@@ -557,42 +593,33 @@ static void contents_update(u32 p, u32 nav)
 static void contents_draw(void)
 {
     const Book *bk = &books[page];
-    ui_battery(f_tiny, SCREEN_W - 12, 14, PAPER2);
-    gfx_rect(40, 24, 400, 222, PAPER);
-    font_draw_center(f_head, SCREEN_W / 2, 48, "Contents", INK);
-    font_draw_center(f_small, SCREEN_W / 2, 63, bk->title, FADE);
+    cover_wash(page, 0.3f);
+    ui_battery(f_small, SCREEN_W - 12, 16, MUTED);
+    font_draw(f_head, 16, 30, "Chapters", TEXT, 0);
+    font_draw_fit(f_text, 16 + font_width(f_head, "Chapters", 0) + 12, 28, bk->title, MUTED, 300);
     u32 ms;
     int cur = now_track(page, &ms);
     for (int i = c_scroll; i < bk->track_count && i < c_scroll + 7; i++) {
-        float y = 72 + (i - c_scroll) * 24;
-        int on = i == c_sel, done = !bk->finished ? i < cur : 1;
-        if (on) {
-            gfx_rect(52, y - 1, 376, 22, PAPER2);
-            gfx_rect(52, y - 1, 3, 22, RED);
-        }
-        char rn[24], len[16];
-        roman(rn, sizeof(rn), i + 1);
-        Font *f = on ? f_bold : f_text;
-        u32 col = done && !on ? FADE : INK;
-        font_draw(f_bold, 62, y + 14, rn, i == cur ? RED : FADE, 0);
-        float nx = 110;
-        font_draw_fit(f, nx, y + 14, bk->names[i], col, 250);
-        float ex = nx + fminf(250, font_width(f, bk->names[i], 0)) + 6;
-        for (float dx = ex; dx < 368; dx += 5) gfx_rect(dx, y + 13, 1, 1, HEX(0xAA9678, 255));
+        float y = 42 + (i - c_scroll) * 28;
+        int on = i == c_sel, done = bk->finished || i < cur;
+        if (on) ui_rrect(12, y, SCREEN_W - 24, 26, 8, HEX(0x2C2622, 235));
+        char num[8], len[16];
+        snprintf(num, sizeof(num), "%d", i + 1);
+        font_draw_right(f_value, 44, y + 18, num, i == cur ? WARM : DIM);
+        font_draw_fit(on ? f_button : f_text, 56, y + 17, bk->names[i], done && !on ? MUTED : TEXT, 330);
         ui_format_time(len, sizeof(len), bk->tracks[i].duration_ms);
-        font_draw_right(f_text, 412, y + 14, len, col);
+        font_draw_right(f_small, SCREEN_W - 44, y + 17, len, MUTED);
+        if (i == cur && !bk->finished) bar(56, y + 21, 330, bk->tracks[i].duration_ms ? fminf(1.0f, (float)ms / bk->tracks[i].duration_ms) : 0, WARM);
         if (done && i != cur) {
-            gfx_rect(417, y + 9, 2, 2, FADE);
-            gfx_rect(419, y + 11, 2, 2, FADE);
-            gfx_rect(421, y + 9, 2, 2, FADE);
-            gfx_rect(423, y + 7, 2, 2, FADE);
-            gfx_rect(425, y + 5, 2, 2, FADE);
+            float cx = SCREEN_W - 32, cy = y + 13;
+            for (int k = 0; k < 3; k++) gfx_rect(cx + k, cy + k - 1, 2, 2, WARM);
+            for (int k = 0; k < 5; k++) gfx_rect(cx + 3 + k, cy + 1 - k, 2, 2, WARM);
         }
     }
-    if (c_scroll + 7 < bk->track_count) font_draw_center(f_small, SCREEN_W / 2, 242, "\xE2\x80\xA6", FADE);
-    static const int g[] = { ICON_CROSS, ICON_CIRCLE };
-    static const char *const l[] = { "Play chapter", "Back" };
-    hints_bar(g, l, 2, 264);
+    if (c_scroll + 7 < bk->track_count) font_draw_center(f_small, SCREEN_W / 2, 244, "\xE2\x80\xA6", MUTED);
+    static const int g[] = { ICON_CROSS, -1, ICON_CIRCLE };
+    static const char *const l[] = { "Play chapter", "L/R Page", "Back" };
+    hints_bar(g, l, 3, 264);
 }
 
 // ---- Main ------------------------------------------------------------------------------------
@@ -600,6 +627,7 @@ static void contents_draw(void)
 int books_update(const Input *in, float dt)
 {
     t_now += dt;
+    grow = fminf(1.0f, grow + dt * 5);
     static int was_ready;
     if (blib_ready() && !was_ready) build();
     was_ready = blib_ready();
@@ -620,14 +648,14 @@ int books_update(const Input *in, float dt)
 void books_draw(float dt)
 {
     (void)dt;
-    gfx_begin(DARKW);
-    wood();
+    gfx_begin(BG);
+    lamp();
     switch (view) {
     case V_SHELF: shelf_draw(); break;
     case V_CARD: card_draw(); break;
     case V_NOW: now_draw(); break;
     case V_CONTENTS: contents_draw(); break;
     }
-    ui_volume(f_small, HEX(0x2A1C14, 240), HEX(0x5A4030, 255), BRASS, PAPER);
+    ui_volume(f_small, HEX(0x2C2622, 240), TRACK_BG, WARM, TEXT);
     gfx_end();
 }
