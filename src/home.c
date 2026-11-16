@@ -18,6 +18,8 @@
 #include "vlib.h"
 #include "games.h"
 #include "blib.h"
+#include "deck.h"
+#include "visual.h"
 
 enum { SEL_MUSIC, SEL_VIDEO, SEL_GAMES, SEL_BOOKS, SEL_STATS, SEL_COUNT };
 #define TILES 4
@@ -396,15 +398,89 @@ static void pic_frame(void)
 static const u32 back_c0[TILES] = { HEX(0x3A2E6E, 255), HEX(0x1E3E6E, 255), HEX(0x1F5A44, 255), HEX(0x7A4A3A, 255) };
 static const u32 back_c1[TILES] = { HEX(0x14121F, 255), HEX(0x0E1626, 255), HEX(0x0D1F18, 255), HEX(0x2A1A26, 255) };
 
+// The Music backdrop dresses as the music theme picked in Settings.
+static float eq[28];
+
+static void music_back(float a)
+{
+    u32 tint = color_alpha(0xFFFFFFFF, a);
+    int song = player_song();
+    const Texture *t = song >= 0 ? art_get(song, ART_LARGE) : NULL;
+    gfx_filter(1);
+    if (settings.theme == THEME_DECK) {
+        u32 fg, bg;
+        deck_colors(&fg, &bg);
+        gfx_rect(0, 0, SCREEN_W, SCREEN_H, color_alpha(bg, a));
+        u32 dot = color_alpha(color_lerp(bg, fg, 0.10f), a);
+        for (int y = 0; y < SCREEN_H; y += 4) gfx_rect(0, y, SCREEN_W, 2, dot); // LCD dot grid:
+        for (int x = 2; x < SCREEN_W; x += 4) gfx_rect(x, 0, 2, SCREEN_H, color_alpha(bg, a)); // rows cut into dots
+        Font *big = ui_font(FAMILY_SILKSCREEN, 700, 16), *small = ui_font(FAMILY_SILKSCREEN, 400, 8);
+        gfx_filter(0);
+        float x = 262;
+        gfx_rect(x, 40, 46, 13, color_alpha(fg, a * 0.9f));
+        gfx_rect(x + 1, 41, 44, 11, color_alpha(bg, a));
+        font_draw(small, x + 5, 50, "FL/AC", color_alpha(fg, a), 0);
+        char name[128];
+        snprintf(name, sizeof(name), "%s", song >= 0 ? song_title(&lib.songs[song]) : "NO DISC");
+        for (char *c = name; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+        font_draw_fit(big, x, 78, name, color_alpha(fg, a), 202);
+        if (song >= 0) font_draw_fit(small, x, 92, song_artist(&lib.songs[song]), color_alpha(color_lerp(bg, fg, 0.7f), a), 202);
+        // EQ from the real audio.
+        for (int i = 0; i < 25; i++) {
+            int h = (int)(eq[i] * 13 + 0.5f);
+            for (int s = 0; s < 13; s++) {
+                u32 c = s < h ? fg : color_lerp(bg, fg, 0.15f);
+                gfx_rect(x + i * 8, 164 - s * 5, 6, 3, color_alpha(c, a));
+            }
+        }
+        gfx_filter(1);
+        return;
+    }
+    if (settings.theme == THEME_POD) {
+        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0xF0F2F6, 255), a), color_alpha(HEX(0xF0F2F6, 255), a),
+                     color_alpha(HEX(0xC9CCD4, 255), a), color_alpha(HEX(0xC9CCD4, 255), a));
+        gfx_rect(0, 0, SCREEN_W, 30, color_alpha(HEX(0xD6D9E0, 255), a));
+        font_draw(f_small_b, 240, 22, "FL/AC classic", color_alpha(HEX(0x28282F, 255), a), 0);
+        float cx = 330, cy = 44, cs = 124;
+        if (t) {
+            gfx_tex(t, cx, cy, cs, cs, tint);
+            // A soft reflection: the cover's bottom rows, faded.
+            gfx_tex_part(t, 0, t->h * 0.75f, t->w, t->h * 0.25f, cx, cy + cs + 2, cs, cs * 0.25f, color_alpha(0xFFFFFFFF, a * 0.25f));
+            gfx_gradient(cx, cy + cs + 2, cs, cs * 0.25f, color_alpha(HEX(0xD8DBE2, 0), a), color_alpha(HEX(0xD8DBE2, 0), a),
+                         color_alpha(HEX(0xD8DBE2, 255), a), color_alpha(HEX(0xD8DBE2, 255), a));
+        } else {
+            ui_icon(ICON_NOTE, cx + cs / 2 - 24, cy + cs / 2 - 24, 48, color_alpha(HEX(0x9A9DA8, 255), a));
+        }
+        if (song >= 0 && lib.songs[song].duration_ms) {
+            float p = fminf(1.0f, (float)player_position_ms() / lib.songs[song].duration_ms);
+            gfx_rect(cx, cy + cs + 38, cs, 5, color_alpha(HEX(0xC8C8CE, 255), a));
+            gfx_rect(cx, cy + cs + 38, cs * p, 5, color_alpha(HEX(0x2E78DC, 255), a));
+        }
+        return;
+    }
+    // FL/AC: the cover's colors, soft and dark, with the cover itself on the right.
+    if (t) {
+        float sw = t->w * 0.5f, sh = sw * SCREEN_H / SCREEN_W;
+        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
+        gfx_rect(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x3C2819, 90), a));
+        gfx_tex(t, 330, 44, 124, 124, tint);
+    } else {
+        gfx_gradient(0, 0, SCREEN_W, SCREEN_H, color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x4A3020, 255), a),
+                     color_alpha(HEX(0x14121F, 255), a), color_alpha(HEX(0x1E1814, 255), a));
+    }
+    float x = 360;
+    x = font_draw(f_mid, x, 38, "FL", color_alpha(TEXT, a), 0);
+    x = font_draw(f_mid, x, 38, "/", color_alpha(ACCENT, a), 0);
+    font_draw(f_mid, x, 38, "AC", color_alpha(TEXT, a), 0);
+}
+
 static void draw_back(int tile, float a)
 {
     u32 tint = color_alpha(0xFFFFFFFF, a);
     const Texture *t = NULL;
     gfx_filter(1);
-    if (tile == SEL_MUSIC && player_song() >= 0 && (t = art_get(player_song(), ART_LARGE))) {
-        // The middle of the cover, stretched soft across the screen.
-        float sw = t->w * 0.8f, sh = sw * SCREEN_H / SCREEN_W;
-        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, tint);
+    if (tile == SEL_MUSIC) {
+        music_back(a);
         return;
     }
     if (tile == SEL_VIDEO && vlib_continue() >= 0 && (t = vlib_thumb(vlib_continue()))) {
@@ -436,8 +512,9 @@ static void stream_hero(void)
     hero_of(tile, &h);
     float y = 60;
     font_draw(f_tiny, PAD, y, h.label, ACCENT, 1);
-    font_draw_fit(f_title, PAD, y + 26, h.title, TEXT, 300);
-    font_draw_fit(f_small, PAD, y + 44, h.sub, MUTED, 300);
+    float max_w = tile == SEL_MUSIC ? 236 : 300; // the music skins draw on the right
+    font_draw_fit(f_title, PAD, y + 26, h.title, TEXT, max_w);
+    font_draw_fit(f_small, PAD, y + 44, h.sub, MUTED, max_w);
     if (h.progress >= 0) {
         gfx_rect(PAD, y + 52, 200, 2, RGBA(255, 255, 255, 40));
         gfx_rect(PAD, y + 52, 200 * h.progress, 2, ACCENT);
@@ -503,6 +580,12 @@ static void hints(Font *f, float y, u32 color)
 static void stream_draw(void)
 {
     pic_frame();
+    if (settings.theme == THEME_DECK && back_k[SEL_MUSIC] > 0.01f) {
+        static u32 last;
+        u32 now = (u32)(t_now * 1000);
+        visual_bands(eq, 25, last ? (now - last) / 1000.0f : 0.016f);
+        last = now;
+    }
     for (int i = 0; i < TILES; i++) if (back_k[i] > 0.01f) draw_back(i, back_k[i]);
     // Darken toward the text on the left and into the tiles below.
     gfx_gradient(0, 0, SCREEN_W, SCREEN_H, HEX(0x0B0C10, 235), HEX(0x0B0C10, 70), HEX(0x0B0C10, 235), HEX(0x0B0C10, 70));
