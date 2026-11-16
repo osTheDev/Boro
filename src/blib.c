@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tags.h"
+#include "m4b.h"
 
 Book *books;
 int book_count;
@@ -80,12 +81,18 @@ static u32 hash(const char *s)
     return h;
 }
 
-// Copies a track's embedded picture out once, so it can be shown like a cover file.
-static void extract_art(Book *b, const char *mp3, const TrackInfo *ti)
+static int is_m4b(const char *name) { return ends_with(name, ".m4b") || ends_with(name, ".m4a"); }
+
+// Copies a file's embedded picture out once, so it can be shown like a cover file.
+static void extract_at(Book *b, const char *mp3, u32 offset, u32 size, int png)
 {
-    if (!ti->art_size || ti->art_size > 2 * 1024 * 1024 || (ti->art_type != ART_JPEG && ti->art_type != ART_PNG)) return;
+    if (!size || size > 2 * 1024 * 1024) return;
+    TrackInfo tmp;
+    TrackInfo *ti = &tmp;
+    ti->art_offset = offset;
+    ti->art_size = size;
     char path[300];
-    snprintf(path, sizeof(path), "%s/%08x.%s", art_dir, (unsigned)hash(b->dir), ti->art_type == ART_PNG ? "png" : "jpg");
+    snprintf(path, sizeof(path), "%s/%08x.%s", art_dir, (unsigned)hash(b->dir), png ? "png" : "jpg");
     SceIoStat st;
     if (sceIoGetstat(path, &st) >= 0 && st.st_size > 0) { snprintf(b->cover, sizeof(b->cover), "%s", path); return; }
     u8 *buf = malloc(ti->art_size);
@@ -108,6 +115,41 @@ static void extract_art(Book *b, const char *mp3, const TrackInfo *ti)
     free(buf);
 }
 
+static void extract_art(Book *b, const char *mp3, const TrackInfo *ti)
+{
+    if (ti->art_type != ART_JPEG && ti->art_type != ART_PNG) return;
+    extract_at(b, mp3, ti->art_offset, ti->art_size, ti->art_type == ART_PNG);
+}
+
+static M4bInfo minfo; // big: one, for the scan thread
+
+// Adds an M4B's chapters (or the whole file as one part) to the book.
+static int add_m4b(Book *b, const char *file, int k, int max)
+{
+    if (m4b_info(file, &minfo) < 0) return k;
+    if (!b->author[0]) snprintf(b->author, sizeof(b->author), "%s", minfo.author);
+    if (!b->cover[0] && minfo.cover_size) extract_at(b, file, minfo.cover_offset, minfo.cover_size, minfo.cover_png);
+    int n = minfo.chapter_count ? minfo.chapter_count : 1;
+    for (int c = 0; c < n && k < max; c++, k++) {
+        BookTrack *t = &b->tracks[k];
+        memset(t, 0, sizeof(*t));
+        snprintf(t->path, sizeof(t->path), "%s", file);
+        t->kind = BOOK_M4B;
+        t->sample_rate = minfo.rate;
+        t->start_ms = minfo.chapter_count ? minfo.chapter_ms[c] : 0;
+        t->end_ms = c + 1 < minfo.chapter_count ? minfo.chapter_ms[c + 1] : minfo.duration_ms;
+        t->duration_ms = t->end_ms - t->start_ms;
+        if (minfo.chapter_count && minfo.chapter_name[c][0]) snprintf(b->names[k], sizeof(b->names[k]), "%s", minfo.chapter_name[c]);
+        else if (minfo.chapter_count) snprintf(b->names[k], sizeof(b->names[k]), "Chapter %d", k + 1);
+        else {
+            const char *slash = strrchr(file, '/');
+            base_title(b->names[k], sizeof(b->names[k]), slash ? slash + 1 : file);
+        }
+        b->total_ms += t->duration_ms;
+    }
+    return k;
+}
+
 // Reads every track of a book; files[] are full paths in play order.
 static void add_book(const char *dir, const char *title, char **files, int n, const char *cover)
 {
@@ -125,11 +167,17 @@ static void add_book(const char *dir, const char *title, char **files, int n, co
     snprintf(b->dir, sizeof(b->dir), "%s", dir);
     snprintf(b->title, sizeof(b->title), "%s", title);
     snprintf(b->cover, sizeof(b->cover), "%s", cover ? cover : "");
-    b->tracks = calloc(n, sizeof(BookTrack));
-    b->names = calloc(n, sizeof(*b->names));
+    // M4B chapters can outnumber the files: room for the most, trimmed after.
+    b->tracks = calloc(BOOK_TRACKS_MAX, sizeof(BookTrack));
+    b->names = calloc(BOOK_TRACKS_MAX, sizeof(*b->names));
     if (!b->tracks || !b->names) { free(b->tracks); free(b->names); return; }
     int k = 0;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n && k < BOOK_TRACKS_MAX; i++) {
+        if (is_m4b(files[i])) {
+            k = add_m4b(b, files[i], k, BOOK_TRACKS_MAX);
+            if (n == 1 && !cover && minfo.title[0]) snprintf(b->title, sizeof(b->title), "%s", minfo.title);
+            continue;
+        }
         TrackInfo ti;
         if (tags_read(files[i], &ti) < 0) continue;
         BookTrack *t = &b->tracks[k];
@@ -150,8 +198,12 @@ static void add_book(const char *dir, const char *title, char **files, int n, co
     }
     if (!k) { free(b->tracks); free(b->names); return; }
     b->track_count = k;
+    BookTrack *tr = realloc(b->tracks, k * sizeof(BookTrack));
+    char (*nm)[96] = realloc(b->names, k * sizeof(*b->names));
+    if (tr) b->tracks = tr;
+    if (nm) b->names = nm;
     // One file with a tag title reads better than the file name.
-    if (n == 1 && !cover) {
+    if (n == 1 && !cover && !is_m4b(files[0])) {
         TrackInfo ti;
         if (tags_read(files[0], &ti) >= 0 && ti.album[0]) snprintf(b->title, sizeof(b->title), "%s", ti.album);
     }
@@ -174,7 +226,7 @@ static void scan_dir(const char *dir, int depth)
         snprintf(path, sizeof(path), "%s/%s", dir, ent.d_name);
         if (FIO_S_ISDIR(ent.d_stat.st_mode)) {
             if (dn < cap && dirs) dirs[dn++] = strdup(path);
-        } else if (ends_with(ent.d_name, ".mp3")) {
+        } else if (ends_with(ent.d_name, ".mp3") || is_m4b(ent.d_name)) {
             if (n < cap && files) files[n++] = strdup(path);
         } else if (!cover[0] && (!strncasecmp(ent.d_name, "cover.", 6) || !strncasecmp(ent.d_name, "folder.", 7)) &&
                    (ends_with(ent.d_name, ".jpg") || ends_with(ent.d_name, ".jpeg") || ends_with(ent.d_name, ".png"))) {

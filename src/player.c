@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "library.h"
+#include "m4b.h"
+#include <pspaudiocodec.h>
+#include <malloc.h>
 
 #define RING 32768 // stereo frames buffered ahead (~0.7 s at 44.1 kHz)
 #define BLOCK 1024 // frames per hardware output call
@@ -58,7 +61,63 @@ typedef struct {
     u32 offset; // frames skipped by a seek
     int errors; // bad frames so far, tolerated after a seek
     u32 total;  // remaining when decoding started
+    int aac;    // reading an M4B through the AAC decoder
 } Track;
+
+// ---- AAC (M4B audiobooks) ------------------------------------------------------
+// The open book file stays open between its chapters.
+
+static M4b *m4b;
+static char m4b_path[256];
+static unsigned long codec[65] __attribute__((aligned(64)));
+static void *codec_work;
+static int codec_rate;
+static u8 aac_src[8192 + 64] __attribute__((aligned(64)));
+
+static void aac_release(void)
+{
+    if (codec_rate) sceAudiocodecReleaseEDRAM(codec);
+    codec_rate = 0;
+}
+
+static int aac_init(int rate)
+{
+    if (codec_rate == rate) return 0;
+    aac_release();
+    memset(codec, 0, sizeof(codec));
+    if (sceAudiocodecCheckNeedMem(codec, PSP_CODEC_AAC) < 0 || !codec[4]) return -1;
+    if (!codec_work) codec_work = memalign(64, codec[4] < 0x10000 ? 0x10000 : codec[4]);
+    if (!codec_work) return -1;
+    codec[3] = (unsigned long)codec_work;
+    codec[10] = rate;
+    if (sceAudiocodecInit(codec, PSP_CODEC_AAC) < 0) return -1;
+    codec_rate = rate;
+    return 0;
+}
+
+static int open_aac(Track *t, const BookTrack *b, u32 start_ms)
+{
+    if (!m4b || strcmp(m4b_path, b->path)) {
+        m4b_close(m4b);
+        m4b = m4b_open(b->path);
+        snprintf(m4b_path, sizeof(m4b_path), "%s", m4b ? b->path : "");
+    }
+    if (!m4b || aac_init(m4b_rate(m4b)) < 0) return -1;
+    int rate = m4b_rate(m4b);
+    u32 want = b->start_ms + start_ms;
+    // Start a frame early: AAC needs the frame before to decode cleanly.
+    u32 at = m4b_seek(m4b, want);
+    if (at > 0) at = m4b_seek(m4b, at - 1);
+    t->aac = 1;
+    t->rate = rate;
+    t->handle = t->fd = -1;
+    t->errors = 0;
+    t->offset = (u32)((u64)start_ms * rate / 1000);
+    t->skip = (u32)((u64)(want - at) * rate / 1000);
+    t->remaining = b->end_ms > want ? (u32)((u64)(b->end_ms - want) * rate / 1000) : 0;
+    t->total = t->remaining;
+    return t->remaining ? 0 : -1;
+}
 
 static int feed(Track *t)
 {
@@ -74,6 +133,7 @@ static int feed(Track *t)
 
 static void close_track(Track *t)
 {
+    t->aac = 0;
     if (t->handle >= 0) sceMp3ReleaseMp3Handle(t->handle);
     if (t->fd >= 0) sceIoClose(t->fd);
     t->handle = t->fd = -1;
@@ -137,6 +197,8 @@ static u32 find_frame(SceUID fd, u32 pos, int rate)
 
 static int open_track(Track *t, int song, u32 start_ms)
 {
+    t->aac = 0;
+    if (book_mode && book[song].kind == BOOK_M4B) return open_aac(t, &book[song], start_ms);
     const char *path;
     const Song *s = track_song(song, &path);
     t->handle = -1;
@@ -181,14 +243,29 @@ static int open_track(Track *t, int song, u32 start_ms)
 // Decodes one MP3 frame into the ring. Returns 0 at the end of the track.
 static int decode_frame(Track *t)
 {
-    if (sceMp3CheckStreamDataNeeded(t->handle) > 0 && feed(t) < 0) return 0;
     SceShort16 *pcm;
-    int bytes = sceMp3Decode(t->handle, &pcm);
+    int bytes;
+    if (t->aac) {
+        int n = m4b_next(m4b, aac_src, sizeof(aac_src) - 64);
+        if (n <= 0) return 0;
+        sceKernelDcacheWritebackRange(aac_src, n);
+        codec[6] = (unsigned long)aac_src;
+        codec[7] = n;
+        codec[8] = (unsigned long)pcm_buf;
+        codec[9] = 1024 * 4;
+        // A bad frame plays as silence rather than ending the chapter.
+        if (sceAudiocodecDecode(codec, PSP_CODEC_AAC) < 0) memset(pcm_buf, 0, 1024 * 4);
+        pcm = pcm_buf;
+        bytes = 1024 * 4;
+    } else {
+    if (sceMp3CheckStreamDataNeeded(t->handle) > 0 && feed(t) < 0) return 0;
+    bytes = sceMp3Decode(t->handle, &pcm);
     // After a seek the first frames can lean on data before the cut and fail
     // to decode: skip those rather than ending the song.
     if (bytes < 0 && t->offset && ++t->errors < 32) return 1;
     if (bytes == 0 && t->offset && t->remaining == t->total && ++t->errors < 32) return 1;
     if (bytes <= 0) return 0;
+    }
     // The Media Engine writes the PCM straight to memory: drop any stale
     // cached copy before the CPU reads it.
     sceKernelDcacheInvalidateRange(pcm_buf, sizeof(pcm_buf));
@@ -236,7 +313,7 @@ static void extend_radio(void)
 static int decoder_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    Track t = { -1, -1, 0, 0, 0, 0, 0, 0 };
+    Track t = { -1, -1, 0, 0, 0, 0, 0, 0, 0 };
     int open = 0;
     u32 start_ms = 0;
     for (;;) {

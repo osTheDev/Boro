@@ -263,7 +263,7 @@ static void shelf_draw(void)
         char line[128];
         snprintf(line, sizeof(line), "Copy each book into its own folder in %s/", blib_dir());
         font_draw_center(f_text, SCREEN_W / 2, 142, line, INK);
-        font_draw_center(f_small, SCREEN_W / 2, 160, "MP3s play in name order. Add cover.jpg for the art.", FADE);
+        font_draw_center(f_small, SCREEN_W / 2, 160, "MP3 or M4B. Files play in name order. Add cover.jpg for the art.", FADE);
         return;
     }
     int current = tab == TAB_SHELF ? blib_current() : -1;
@@ -376,7 +376,9 @@ static void card_draw(void)
         snprintf(v[2], sizeof(v[2]), "Never");
     }
     const char *cv = !b->cover[0] ? "no cover" : strstr(b->cover, "/bookart/") ? "art from the MP3" : strrchr(b->cover, '/') + 1;
-    snprintf(v[3], sizeof(v[3]), "%s \xC2\xB7 %s", b->track_count > 1 || strcasecmp(b->dir + strlen(b->dir) - 4, ".mp3") ? "MP3 folder" : "MP3 file", cv);
+    const char *fmt = b->tracks[0].kind == BOOK_M4B ? (strcmp(b->tracks[0].path, b->tracks[b->track_count - 1].path) ? "M4B files" : "M4B file")
+                      : b->track_count > 1 || strcasecmp(b->dir + strlen(b->dir) - 4, ".mp3") ? "MP3 folder" : "MP3 file";
+    snprintf(v[3], sizeof(v[3]), "%s \xC2\xB7 %s", fmt, cv);
     static const char *const keys[4] = { "Length", "Progress", "Last read", "Format" };
     for (int i = 0; i < 4; i++) {
         float ry = y + 70 + i * 20;

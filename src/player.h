@@ -12,10 +12,13 @@ void player_init(void);
 // Audiobooks play through the same decoder, from their own track list rather
 // than the music library. While a book plays, player_song() is -1 so the
 // music screens show nothing playing; player_book_track() says where it is.
+enum { BOOK_MP3, BOOK_M4B };
 typedef struct {
     char path[256];
-    u32 audio_start, audio_end, duration_ms, total_samples;
+    int kind;                 // BOOK_*
+    u32 audio_start, audio_end, duration_ms, total_samples; // MP3
     s32 enc_delay, sample_rate;
+    u32 start_ms, end_ms;     // M4B: the chapter's span in the file
 } BookTrack;
 #define BOOK_TRACKS_MAX 512
 // Plays tracks[start] from start_ms, then the rest in order.
