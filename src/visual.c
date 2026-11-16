@@ -34,6 +34,8 @@ static int scene;
 static Part parts[MAX_PARTS];
 static int part_count;
 static float bands[BANDS], peaks[24];
+static float mean[BANDS], dev[BANDS]; // each band's recent level, for the auto level
+static float wamp[4] = { 1.6f, 2.7f, 3.8f, 4.9f }; // Dolphin Bay wave heights, swelling with the music
 
 // ---- Colors and pixels ---------------------------------------------------------
 
@@ -170,8 +172,17 @@ static void analyze(float dt)
         if (hi <= lo) hi = lo + 1;
         float e = 0;
         for (int k = lo; k < hi; k++) e = fmaxf(e, sqrtf(re[k] * re[k] + im[k] * im[k]));
-        float v = log10f(1 + e * (1 + b * 0.8f)) / 1.4f;
-        if (v > 1) v = 1;
+        float raw = log10f(1 + e * (1 + b * 0.8f)) / 1.4f;
+        if (raw > 1) raw = 1;
+        // Auto level: each band is shown around its own recent average, so a
+        // loud song moves as much as a quiet one instead of sitting at the top.
+        // The average itself scales it down toward silence.
+        float k = fminf(1, dt / 1.5f);
+        mean[b] += (raw - mean[b]) * k;
+        dev[b] += (fabsf(raw - mean[b]) - dev[b]) * k;
+        float d = fmaxf(dev[b], 0.03f);
+        float v = 0.45f + 0.55f * (raw - mean[b]) / (2.2f * d);
+        v = fminf(1, fmaxf(0, v)) * fminf(1, mean[b] * 3);
         bands[b] = v > bands[b] ? v : fmaxf(v, bands[b] - dt * 1.6f);
     }
 }
@@ -188,7 +199,7 @@ static void add_part(float x, float y, float vx, float vy, float size)
 // The far water layer's surface at x: the dolphins' waterline.
 static float surface(float x)
 {
-    return 78 + sinf(x * 0.05f + t_now * 0.6f) * 1.6f + sinf(x * 0.11f - t_now * 0.9f) * 1.6f * 0.35f;
+    return 78 + sinf(x * 0.05f + t_now * 0.6f) * wamp[0] + sinf(x * 0.11f - t_now * 0.9f) * wamp[0] * 0.35f;
 }
 
 // One leap: rises from under the water, arcs and dives back in. Pixels under
@@ -238,9 +249,17 @@ static void scene_dolphins(float dt)
             dolphin(0, 30, 140, 50);
             dolphin(0.7f, 52, 120, 38);
         }
-        float base = 78 + l * 14, amp = 1.6f + l * 1.1f;
+        // Each layer swells with part of the music: the far one with the bass,
+        // nearer ones with higher bands, plus a quick ripple on the beat.
+        float lv = 0;
+        for (int b = l * 6; b < l * 6 + 6; b++) lv += band(b);
+        lv /= 6;
+        float want = (1.6f + l * 1.1f) * (1 + 1.4f * lv);
+        wamp[l] += (want - wamp[l]) * fminf(1, dt * 5);
+        float base = 78 + l * 14, amp = wamp[l], rip = lv * 1.2f;
         for (int x = 0; x < W; x++) {
-            float y = base + sinf(x * 0.05f + t_now * (0.6f + l * 0.25f) + l) * amp + sinf(x * 0.11f - t_now * 0.9f) * amp * 0.35f;
+            float y = base + sinf(x * 0.05f + t_now * (0.6f + l * 0.25f) + l) * amp + sinf(x * 0.11f - t_now * 0.9f) * amp * 0.35f
+                    + (l ? sinf(x * 0.23f - t_now * 3.1f + l) * rip : 0);
             fill(x, y, 1, H - y, 3 + l * 2);
             plot(x, (int)(y + 0.5f), L[lvl(8 + l * 1.5f)]);
         }
