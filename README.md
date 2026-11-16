@@ -48,4 +48,4 @@ Install the [pspdev toolchain](https://github.com/pspdev/pspdev), then run `make
 
 ## Credits
 
-Sora (The Sora Project Authors) and Manrope (The Manrope Project Authors) fonts, under the SIL Open Font License 1.1 (`res/fonts/OFL-*.txt`).
+Sora (The Sora Project Authors), Manrope (The Manrope Project Authors), Archivo, Silkscreen, VT323 and Liberation Serif (Red Hat, Inc.) fonts, under the SIL Open Font License 1.1 (`res/fonts/OFL-*.txt`).
