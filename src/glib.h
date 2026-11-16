@@ -52,6 +52,18 @@ void glib_detail(int index, GameDetail *d);
 u8 *glib_pic1(int index, int *w, int *h); // RGBA, or NULL; free() it
 int glib_launch(int index);               // starts the game; returns only on failure
 
+// Game time for the Stats page and home bar: span_days back from today (0 for
+// all time), the last 7 days one by one (today last), and the top 5 games.
+typedef struct {
+    u32 seconds;
+    u32 days[7];
+    int top_count;
+    const char *top_title[5];
+    int top_game[5]; // into games, or -1 before the scan or if it's gone
+    u32 top_secs[5];
+} GameStats;
+void glib_stats(int span_days, GameStats *out);
+
 void glib_format_time(char *out, int size, u32 seconds); // "42h 10m", "52m"
 void glib_format_last(char *out, int size, const char *last); // "Today", "3 days ago", "Oct 2"
 

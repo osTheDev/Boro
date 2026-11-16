@@ -29,7 +29,14 @@ static void unlock(void) { if (disc_lock >= 0) sceKernelSignalSema(disc_lock, 1)
 typedef struct {
     char path[256], id[16], title[96], last[20];
     u32 seconds, sessions;
+    int game; // index into games once the scan is in, else -1
 } Played;
+
+// Every session by day, for the Stats page and the home glance bar.
+typedef struct { int day, played; u32 seconds; } Session;
+static Session *sessions;
+static int session_count, session_cap;
+static int day_number(int y, int m, int d);
 
 static Played *played;
 static int played_count, played_cap;
@@ -50,6 +57,7 @@ static Played *played_for(const char *path, const char *id, const char *title)
     snprintf(p->path, sizeof(p->path), "%s", path);
     snprintf(p->id, sizeof(p->id), "%s", id);
     snprintf(p->title, sizeof(p->title), "%s", title);
+    p->game = -1;
     return p;
 }
 
@@ -114,6 +122,16 @@ static void read_log(void)
             char *cr = strchr(f[5], '\r');
             if (cr) *cr = 0;
             Played *p = played_for(f[5], f[2], f[4]);
+            int y, m, d;
+            if (p && sscanf(f[0], "%d-%d-%d", &y, &m, &d) == 3) {
+                if (session_count == session_cap) {
+                    int cap = session_cap ? session_cap * 2 : 64;
+                    Session *ns = realloc(sessions, cap * sizeof(Session));
+                    if (ns) { sessions = ns; session_cap = cap; }
+                }
+                if (session_count < session_cap)
+                    sessions[session_count++] = (Session){ day_number(y, m, d), p - played, strtoul(f[1], NULL, 10) };
+            }
             if (p) {
                 p->seconds += strtoul(f[1], NULL, 10);
                 p->sessions++;
@@ -139,6 +157,7 @@ static void apply_log(void)
             int same = !strcasecmp(p->path, g->path) ||
                        (g->type == GTYPE_PSP && g->disc_id[0] && !strcmp(p->id, g->disc_id));
             if (!same) continue;
+            if (p->game < 0) p->game = i;
             g->seconds += p->seconds;
             g->sessions += p->sessions;
             if (strcmp(p->last, g->last) > 0) snprintf(g->last, sizeof(g->last), "%s", p->last);
@@ -720,4 +739,34 @@ int glib_launch(int index)
     }
     param.key = "game";
     return sctrlKernelLoadExecVSHWithApitype(0x141, path, &param);
+}
+
+void glib_stats(int span_days, GameStats *out)
+{
+    memset(out, 0, sizeof(*out));
+    ScePspDateTime now;
+    sceRtcGetCurrentClockLocalTime(&now);
+    int today = day_number(now.year, now.month, now.day);
+    u32 *per = played_count ? calloc(played_count, sizeof(u32)) : NULL;
+    for (int i = 0; i < session_count; i++) {
+        const Session *e = &sessions[i];
+        int ago = today - e->day;
+        if (ago >= 0 && ago < 7) out->days[6 - ago] += e->seconds;
+        if (span_days && (ago < 0 || ago >= span_days)) continue;
+        out->seconds += e->seconds;
+        if (per) per[e->played] += e->seconds;
+    }
+    // The five most played, longest first.
+    for (int k = 0; k < 5 && per; k++) {
+        int best = -1;
+        for (int j = 0; j < played_count; j++)
+            if (per[j] && (best < 0 || per[j] > per[best])) best = j;
+        if (best < 0) break;
+        out->top_title[k] = played[best].title;
+        out->top_game[k] = played[best].game;
+        out->top_secs[k] = per[best];
+        out->top_count++;
+        per[best] = 0;
+    }
+    free(per);
 }

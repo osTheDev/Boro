@@ -267,35 +267,45 @@ static void draw_stats(void)
 {
     // The week so far, refreshed every few seconds.
     static Stats week;
+    static GameStats gweek;
     static float refresh_t = -1;
     if (library_state() == LIB_READY && (refresh_t < 0 || t_now - refresh_t > 5)) {
         refresh_t = t_now;
         stats_compute(PERIOD_WEEK, &week);
+        glib_stats(7, &gweek);
     }
     float x = PAD, y = STATS_Y, w = SCREEN_W - 2 * PAD;
     panel(x, y, w, STATS_H, 0, sel_k[SEL_STATS]);
-    char time[24], plays[16];
-    stats_format_time(time, sizeof(time), week.ms);
-    snprintf(plays, sizeof(plays), "%d", week.plays);
-    const char *artist = week.top_count[TOP_ARTISTS] ? lib.artists[week.top[TOP_ARTISTS][0]].name : "\xE2\x80\x94";
+    // Music and games together, then each on its own.
+    char time[24], music[24], game[24];
+    stats_format_time(time, sizeof(time), week.ms + gweek.seconds * 1000);
+    stats_format_time(music, sizeof(music), week.ms);
+    stats_format_time(game, sizeof(game), gweek.seconds * 1000);
+    const char *top_label = gweek.top_count ? "Top game" : "Top artist";
+    const char *artist = gweek.top_count ? gweek.top_title[0] :
+                         week.top_count[TOP_ARTISTS] ? lib.artists[week.top[TOP_ARTISTS][0]].name : "\xE2\x80\x94";
     float cx = x + 12, top = y + 8;
     font_draw(f_tiny, cx, top + 9, "THIS WEEK", LABEL, 1);
     font_draw(f_big, cx, top + 30, time, TEXT, 0);
     cx += fmaxf(font_width(f_tiny, "THIS WEEK", 1), font_width(f_big, time, 0)) + 14;
-    font_draw(f_tiny, cx, top + 9, "Plays", LABEL, 0);
-    font_draw(f_mid, cx, top + 26, plays, TEXT, 0);
-    cx += fmaxf(font_width(f_tiny, "Plays", 0), font_width(f_mid, plays, 0)) + 14;
-    font_draw(f_tiny, cx, top + 9, "Top artist", LABEL, 0);
+    font_draw(f_tiny, cx, top + 9, "Music", LABEL, 0);
+    font_draw(f_mid, cx, top + 26, music, TEXT, 0);
+    cx += fmaxf(font_width(f_tiny, "Music", 0), font_width(f_mid, music, 0)) + 12;
+    font_draw(f_tiny, cx, top + 9, "Games", LABEL, 0);
+    font_draw(f_mid, cx, top + 26, game, TEXT, 0);
+    cx += fmaxf(font_width(f_tiny, "Games", 0), font_width(f_mid, game, 0)) + 12;
+    font_draw(f_tiny, cx, top + 9, top_label, LABEL, 0);
 
     float link_w = font_width(f_small_b, "Stats \xE2\x80\xBA", 0);
     float lx = x + w - 12 - link_w;
     font_draw(f_small_b, lx, y + STATS_H / 2 + 4, "Stats \xE2\x80\xBA", ACCENT, 0);
     float chart_x = lx - 14 - 7 * 9 + 3, base = y + STATS_H / 2 + 15;
     font_draw_fit(f_mid, cx, top + 26, artist, TEXT, chart_x - 10 - cx);
-    u32 max = 1;
-    for (int d = 0; d < 7; d++) if (week.bars[d] > max) max = week.bars[d];
+    u32 max = 1, bars[7];
+    for (int d = 0; d < 7; d++) bars[d] = week.bars[d] + gweek.days[d] * 1000;
+    for (int d = 0; d < 7; d++) if (bars[d] > max) max = bars[d];
     for (int d = 0; d < 7; d++) {
-        float h = week.bars[d] ? fmaxf(3, 30.0f * week.bars[d] / max) : 3;
+        float h = bars[d] ? fmaxf(3, 30.0f * bars[d] / max) : 3;
         gfx_rect(chart_x + d * 9, base - h, 6, h, d == 6 ? ACCENT : RGBA(255, 255, 255, 46));
     }
 }
