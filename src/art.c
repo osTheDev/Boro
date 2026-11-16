@@ -13,9 +13,10 @@
 #define SLOTS 64
 #define QUEUE 24
 
-static const int kind_size[ART_KINDS] = { 72, 150, 72 };
-static const float kind_radius[ART_KINDS] = { 4, 6, 36 };
-static const int kind_limit[ART_KINDS] = { 40, 2, 16 };
+static const int kind_size[ART_KINDS] = { 72, 150, 72, 96, 200 };
+static const float kind_radius[ART_KINDS] = { 4, 6, 36, 2, 3 };
+static const int kind_limit[ART_KINDS] = { 40, 2, 16, 24, 2 };
+static int kind_fit(int kind) { return kind >= ART_COVER_S; }
 
 typedef struct {
     int song, kind;   // song == -1: free
@@ -40,18 +41,27 @@ static SceUID lock, wake;
 static void take(void) { sceKernelWaitSema(lock, 1, NULL); }
 static void give(void) { sceKernelSignalSema(lock, 1); }
 
-// Center-crops to a square, box-filters down to size and applies the
-// rounded-corner mask. Also returns the average color.
-static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radius, u32 *avg)
+// Center-crops to a square (or, with fit, keeps the whole picture with its
+// longer side at size), box-filters down and applies the rounded-corner
+// mask. Also returns the average color.
+static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radius, u32 *avg, int fit)
 {
-    Texture *t = tex_create(size, size);
+    int tw = size, th = size;
+    if (fit && w > h) th = size * h / w > 0 ? size * h / w : 1;
+    if (fit && h > w) tw = size * w / h > 0 ? size * w / h : 1;
+    Texture *t = tex_create(tw, th);
+    if (!t) return NULL;
     int side = w < h ? w : h, ox = (w - side) / 2, oy = (h - side) / 2;
     float scale = (float)side / size;
+    if (fit) {
+        ox = oy = 0;
+        scale = (float)(w > h ? w : h) / size;
+    }
     u32 sr = 0, sg = 0, sb = 0;
-    for (int y = 0; y < size; y++) {
+    for (int y = 0; y < th; y++) {
         int y0 = oy + (int)(y * scale), y1 = oy + (int)((y + 1) * scale);
         if (y1 <= y0) y1 = y0 + 1;
-        for (int x = 0; x < size; x++) {
+        for (int x = 0; x < tw; x++) {
             int x0 = ox + (int)(x * scale), x1 = ox + (int)((x + 1) * scale);
             if (x1 <= x0) x1 = x0 + 1;
             u32 r = 0, g = 0, b = 0, n = 0;
@@ -65,7 +75,7 @@ static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radiu
             sr += r; sg += g; sb += b;
             // Rounded corner coverage.
             float cx = x + 0.5f, cy = y + 0.5f, a = 1;
-            float qx = fabsf(cx - size * 0.5f) - (size * 0.5f - radius), qy = fabsf(cy - size * 0.5f) - (size * 0.5f - radius);
+            float qx = fabsf(cx - tw * 0.5f) - (tw * 0.5f - radius), qy = fabsf(cy - th * 0.5f) - (th * 0.5f - radius);
             if (qx > 0 && qy > 0) {
                 float d = sqrtf(qx * qx + qy * qy) - radius;
                 a = d < -0.5f ? 1 : d > 0.5f ? 0 : 0.5f - d;
@@ -75,7 +85,7 @@ static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radiu
             t->px[y * t->tw + x] = RGBA(r, g, b, (int)(a * 255));
         }
     }
-    u32 n = size * size;
+    u32 n = tw * th;
     *avg = RGBA(sr / n, sg / n, sb / n, 255);
     tex_upload(t);
     return t;
@@ -83,7 +93,7 @@ static Texture *make_texture(const u8 *rgba, int w, int h, int size, float radiu
 
 // Image files (playlist covers) use keys above every song id.
 #define FILE_KEY 0x1000000
-#define FILES 8
+#define FILES 24
 static char file_paths[FILES][320];
 static int file_next;
 
@@ -96,7 +106,7 @@ static int decode_file(Job *j)
     int w = 0, h = 0;
     u8 *rgba = image_load(path, kind_size[j->kind], &w, &h);
     if (!rgba) return 0;
-    j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color);
+    j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color, kind_fit(j->kind));
     free(rgba);
     return 1;
 }
@@ -117,7 +127,7 @@ static int decode(Job *j)
     if (ok) rgba = image_decode(data, s->art_size, kind_size[j->kind], &w, &h);
     free(data);
     if (!rgba) return 0;
-    j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color);
+    j->tex = make_texture(rgba, w, h, kind_size[j->kind], kind_radius[j->kind], &j->color, kind_fit(j->kind));
     free(rgba);
     return 1;
 }

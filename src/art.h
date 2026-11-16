@@ -5,7 +5,9 @@
 
 #include "gfx.h"
 
-enum { ART_SMALL, ART_LARGE, ART_ROUND, ART_KINDS }; // 72px, 150px, 72px circle
+enum { ART_SMALL, ART_LARGE, ART_ROUND, ART_COVER_S, ART_COVER_L, ART_KINDS };
+// 72px, 150px, 72px circle; the COVER kinds keep the picture's own shape
+// (nothing cropped), its longer side 96px or 200px (book covers).
 
 void art_init(void);
 // Returns the texture for a song's embedded art, or NULL while it loads or

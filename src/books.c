@@ -145,17 +145,30 @@ static void bar(float x, float y, float w, float p, u32 fill, u32 bg)
     gfx_rect(x, y, w * p, 3, fill);
 }
 
+// The cover's own shape (width over height); 2:3 until it loads or without one.
+static float cover_aspect(int b, int kind)
+{
+    const Texture *t = books[b].cover[0] ? art_get_file(books[b].cover, kind) : NULL;
+    float a = t && t->h ? (float)t->w / t->h : 0.667f;
+    return a < 0.4f ? 0.4f : a > 1.5f ? 1.5f : a;
+}
+
+// The biggest size of the whole cover that fits in max_w x max_h.
+static void cover_fit(int b, int kind, float max_w, float max_h, float *w, float *h)
+{
+    float a = cover_aspect(b, kind);
+    *h = max_h;
+    *w = max_h * a;
+    if (*w > max_w) { *w = max_w; *h = max_w / a; }
+}
+
 static void cover(int b, float x, float y, float w, float h, int kind)
 {
     const Book *bk = &books[b];
     const Texture *t = bk->cover[0] ? art_get_file(bk->cover, kind) : NULL;
     if (t) {
         gfx_filter(1);
-        // Square art cropped to the shape asked for.
-        float sw = t->w, sh = t->h;
-        if (w / h < sw / sh) sw = sh * w / h;
-        else sh = sw * h / w;
-        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, x, y, w, h, 0xFFFFFFFF);
+        gfx_tex(t, x, y, w, h, 0xFFFFFFFF); // the whole cover, never cropped
     } else {
         // A cloth binding with the title stamped on.
         u32 c0, c1;
@@ -194,7 +207,6 @@ static void shelf_update(u32 p, u32 nav)
     if (nav & PSP_CTRL_LEFT && sel > 0) sel--;
     if (nav & PSP_CTRL_RIGHT && sel < list_n - 1) sel++;
     if (sel < scroll) scroll = sel;
-    if (sel > scroll + 6) scroll = sel - 6;
     int current = tab == TAB_SHELF ? blib_current() : -1;
     if (p & PSP_CTRL_TRIANGLE && current >= 0) {
         if (blib_playing() != current) blib_play(current);
@@ -216,7 +228,9 @@ static void now_reading(int b)
     snprintf(ch, sizeof(ch), "Ch %d of %d", t + 1, books[b].track_count);
     font_draw_right(f_bold, x + w - 8, y + 11, ch, INK);
     for (float ly = y + 26; ly < y + h; ly += 12) gfx_rect(x + 98, ly, w - 106, 1, RULE);
-    cover(b, x + 8, y + 17, 44, 46, ART_SMALL);
+    float cw, chh;
+    cover_fit(b, ART_COVER_S, 48, 46, &cw, &chh);
+    cover(b, x + 8 + (48 - cw) / 2, y + 17 + (46 - chh), cw, chh, ART_COVER_S);
     font_draw_fit(f_title, x + 64, y + 31, books[b].title, INK, 300);
     font_draw_fit(f_text, x + 64, y + 46, books[b].author[0] ? books[b].author : "Unknown author", FADE, 300);
     format_len(left, sizeof(left), books[b].total_ms - blib_elapsed(b));
@@ -258,22 +272,30 @@ static void shelf_draw(void)
     if (!list_n) {
         font_draw_center(f_text, SCREEN_W / 2, top + 40, tab == TAB_FINISHED ? "Finished books will rest here." : "Every book is on the go or finished.", PAPER2);
     }
-    for (int i = scroll; i < list_n && i < scroll + 7; i++) {
+    // Covers stand at their own shapes; scroll so the picked one shows.
+    float ax = 0;
+    for (;;) {
+        float x = 14;
+        for (int i = scroll; i < sel; i++) x += cover_aspect(list[i], ART_COVER_S) * 68 + 10;
+        if (sel > scroll && x + cover_aspect(list[sel], ART_COVER_S) * 74 > SCREEN_W - 14) scroll++;
+        else break;
+    }
+    for (int i = scroll, x0 = 14; i < list_n && x0 < SCREEN_W; i++) {
         int on = i == sel;
-        float x = 14 + (i - scroll) * 65, h = on ? 74 : 68, y = top + (74 - h) - (on ? 6 : 0);
-        if (on) ui_ring(x - 3, y - 3, 62, h + 6, 2, BRASS);
-        cover(list[i], x, y, 56, h, ART_SMALL);
+        float h = on ? 74 : 68, w = cover_aspect(list[i], ART_COVER_S) * h, x = x0, y = top + (74 - h) - (on ? 6 : 0);
+        if (on) { ui_ring(x - 3, y - 3, w + 6, h + 6, 2, BRASS); ax = x + w / 2; }
+        cover(list[i], x, y, w, h, ART_COVER_S);
         if (books[list[i]].finished) {
-            gfx_rect(x + 30, y + 4, 24, 11, RED);
-            font_draw(f_tiny, x + 32, y + 13, "READ", PAPER, 0);
+            gfx_rect(x + w - 26, y + 4, 24, 11, RED);
+            font_draw(f_tiny, x + w - 24, y + 13, "READ", PAPER, 0);
         }
+        x0 = (int)(x + w + 10);
     }
     gfx_rect(0, top + 74, SCREEN_W, 10, WOOD2);
     gfx_rect(0, top + 74, SCREEN_W, 1, HEX(0x785032, 255));
     gfx_rect(0, top + 84, SCREEN_W, 4, DARKW);
     if (list_n) {
         int b = list[sel];
-        float ax = 14 + (sel - scroll) * 65 + 28;
         ui_triangle(ax - 2, top + 89, UI_UP, BRASS);
         char info[200], len[32];
         format_len(len, sizeof(len), books[b].total_ms);
@@ -325,7 +347,9 @@ static void card_draw(void)
     snprintf(crumb, sizeof(crumb), "Library \xE2\x80\xBA %s", b->title);
     font_draw_fit(f_text, 14, 20, crumb, FADE, 360);
     ui_battery(f_tiny, SCREEN_W - 12, 16, PAPER2);
-    cover(page, 14, 40, 130, 130, ART_LARGE);
+    float cw, chh;
+    cover_fit(page, ART_COVER_L, 130, 196, &cw, &chh);
+    cover(page, 14 + (130 - cw) / 2, 36, cw, chh, ART_COVER_L);
 
     float x = 152, y = 34, w = 314;
     gfx_rect(x, y, w, 200, PAPER);
@@ -435,7 +459,9 @@ static void now_draw(void)
     gfx_rect(20, 30, 440, 206, PAPER);
     gfx_gradient(222, 30, 18, 206, HEX(0x785A3C, 0), HEX(0x785A3C, 60), HEX(0x785A3C, 0), HEX(0x785A3C, 60));
     gfx_rect(240, 30, 2, 206, HEX(0xBEAC8C, 255));
-    cover(b, 56, 40, 150, 150, ART_LARGE);
+    float cw, chh;
+    cover_fit(b, ART_COVER_L, 170, 164, &cw, &chh);
+    cover(b, 121 - cw / 2, 38 + (164 - chh) / 2, cw, chh, ART_COVER_L);
     font_draw_fit(f_title, 56, 210, bk->title, INK, 170);
     font_draw_fit(f_small, 56, 224, bk->author, FADE, 170);
 
