@@ -10,7 +10,7 @@ endif
 ASFLAGS = $(CFLAGS)
 LIBDIR =
 LDFLAGS =
-LIBS = -lfreetype -ljpeg -lpng -lz -lbz2 -lpspgu -lpsprtc -lpsppower -lpsphprm -lpspmp3 -lpspaudiocodec -lpspaudio -lpsputility -lpspkubridge -lm
+LIBS = -lfreetype -ljpeg -lpng -lz -lbz2 -lpspgu -lpsprtc -lpsppower -lpsphprm -lpspmp3 -lpspaudiocodec -lpspaudio -lpsputility -lpspkubridge -lpspsystemctrl_user -lm
 
 BUILD_PRX = 1
 

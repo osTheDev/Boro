@@ -1,13 +1,16 @@
 #include "games.h"
 
 #include <pspctrl.h>
+#include <psprtc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include "glib.h"
 #include "gfx.h"
+#include "stats.h"
 #include "ui.h"
+#include "video.h"
 
 #define ACCENT HEX(0x5B8CFF, 255)
 #define BG HEX(0x0E0F13, 255)
@@ -28,7 +31,13 @@ static const char *const tab_names[TAB_COUNT] = { "Recent", "All Games" };
 enum { SORT_AZ, SORT_MOST, SORT_COUNT };
 static const char *const sort_names[SORT_COUNT] = { "A\xE2\x80\x93Z", "Most played" };
 
-static Font *f_tab, *f_tab_b, *f_title, *f_small, *f_tiny, *f_chip, *f_badge;
+static Font *f_tab, *f_tab_b, *f_title, *f_small, *f_tiny, *f_chip, *f_badge, *f_hero, *f_stat, *f_button;
+
+// The game page: open while page >= 0.
+static int page = -1;
+static Texture *pic1;
+static GameDetail detail;
+static float fail_t; // "Couldn't start" note
 static int inited, tab, sort, sel, *list, list_count, built_for = -1;
 static float scroll;
 
@@ -71,6 +80,9 @@ void games_enter(void)
         f_tiny = ui_font(FAMILY_SORA, 400, 9);
         f_chip = ui_font(FAMILY_SORA, 400, 9);
         f_badge = ui_font(FAMILY_SORA, 700, 8);
+        f_hero = ui_font(FAMILY_SORA, 700, 20);
+        f_stat = ui_font(FAMILY_SORA, 700, 13);
+        f_button = ui_font(FAMILY_SORA, 600, 10);
     }
     glib_scan();
     built_for = -1;
@@ -78,9 +90,45 @@ void games_enter(void)
     scroll = 0;
 }
 
+static void open_page(int index)
+{
+    page = index;
+    glib_detail(index, &detail);
+    int w = 0, h = 0;
+    u8 *px = glib_pic1(index, &w, &h);
+    if (px && w > 0 && h > 0 && w <= 512 && h <= 512) {
+        pic1 = tex_create(w, h);
+        if (pic1) {
+            for (int y = 0; y < h; y++) memcpy(pic1->px + y * pic1->tw, px + y * w * 4, w * 4);
+            tex_upload(pic1);
+        }
+    }
+    free(px);
+}
+
+static void close_page(void)
+{
+    page = -1;
+    if (pic1) tex_destroy(pic1);
+    pic1 = NULL;
+}
+
+static void launch(int index)
+{
+    stats_flush();
+    video_save();
+    glib_launch(index);
+    fail_t = 3; // still here: ARK said no
+}
+
 int games_update(const Input *in, float dt)
 {
-    (void)dt;
+    if (fail_t > 0) fail_t -= dt;
+    if (page >= 0) {
+        if (in->pressed & PSP_CTRL_CROSS) launch(page);
+        if (in->pressed & PSP_CTRL_CIRCLE) close_page();
+        return 0;
+    }
     if (glib_ready() && built_for != game_count) build();
     u32 p = in->pressed, nav = in->nav;
     if (p & PSP_CTRL_CIRCLE) return 1;
@@ -101,6 +149,8 @@ int games_update(const Input *in, float dt)
     if (nav & PSP_CTRL_UP && sel >= COLS) sel -= COLS;
     if (nav & PSP_CTRL_DOWN && sel + COLS < list_count) sel += COLS;
     else if (nav & PSP_CTRL_DOWN && sel / COLS < (list_count - 1) / COLS) sel = list_count - 1;
+    if (p & PSP_CTRL_CROSS) open_page(list[sel]);
+    else if (p & PSP_CTRL_TRIANGLE) launch(list[sel]);
     return 0;
 }
 
@@ -188,8 +238,98 @@ static void draw_grid(float dt)
     gfx_rect(0, SCREEN_H - 20, SCREEN_W, 20, BG);
 }
 
+static void stat_card(float x, const char *label, const char *value)
+{
+    ui_rrect(x, 108, 108, 40, 8, HEX(0x1E2026, 255));
+    font_draw(f_badge, x + 10, 121, label, MUTED, 1);
+    font_draw_fit(f_stat, x + 10, 140, value, TEXT, 92);
+}
+
+static void draw_fail(void)
+{
+    if (fail_t <= 0) return;
+    const char *s = "Couldn\xE2\x80\x99t start this game";
+    float w = font_width(f_small, s, 0) + 28, x = (SCREEN_W - w) / 2;
+    ui_rrect(x, 226, w, 22, 11, HEX(0x2A1A1E, 240));
+    font_draw_center(f_small, SCREEN_W / 2, 241, s, HEX(0xFF8A8A, 255));
+}
+
+static int ext_is(const char *path, const char *ext)
+{
+    int a = strlen(path), b = strlen(ext);
+    return a >= b && !strcasecmp(path + a - b, ext);
+}
+
+static void page_draw(void)
+{
+    const Game *g = &games[page];
+    gfx_begin(BG);
+    if (pic1) {
+        gfx_filter(1);
+        gfx_tex_part(pic1, 0, 0, pic1->w, pic1->h * 140 / 272, 0, 0, SCREEN_W, 140, 0xFFFFFFFF);
+        u32 top = color_alpha(BG, 0.35f), bottom = BG;
+        gfx_gradient(0, 0, SCREEN_W, 140, top, top, bottom, bottom);
+    }
+    font_draw(f_small, 14, 18, "Games", MUTED, 0);
+    ui_battery(f_small, SCREEN_W - 14, 14, MUTED);
+    const Texture *icon = glib_icon(page);
+    if (icon) { gfx_filter(1); gfx_tex(icon, 14, 32, TILE_W, TILE_H, 0xFFFFFFFF); }
+    else ui_placeholder_art(14, 32, TILE_H, 6, page);
+    font_draw_fit(f_hero, 132, 52, g->title, TEXT, SCREEN_W - 146);
+    char sub[96], size[24];
+    const char *kind = g->type == GTYPE_PS1 ? "PS1" : g->type == GTYPE_HOMEBREW ? "Homebrew" :
+                       ext_is(g->path, ".cso") ? "CSO" : ext_is(g->path, ".pbp") ? "EBOOT" : "ISO";
+    if (detail.bytes >= 1000000000ull) snprintf(size, sizeof(size), "%.1f GB", detail.bytes / 1e9);
+    else snprintf(size, sizeof(size), "%d MB", (int)(detail.bytes / 1000000));
+    if (g->disc_id[0]) snprintf(sub, sizeof(sub), "%s \xC2\xB7 %s \xC2\xB7 %s", g->disc_id, kind, size);
+    else snprintf(sub, sizeof(sub), "%s \xC2\xB7 %s", kind, size);
+    font_draw(f_small, 132, 68, sub, MUTED, 0);
+    ui_rrect(132, 76, 60, 20, 10, ACCENT);
+    ui_icon(ICON_PLAY, 141, 81, 10, TEXT);
+    font_draw(f_button, 156, 90, "Play", TEXT, 0);
+
+    char v[24];
+    glib_format_time(v, sizeof(v), g->seconds);
+    stat_card(14, "PLAYED", v);
+    snprintf(v, sizeof(v), "%lu", (unsigned long)g->sessions);
+    stat_card(130, "SESSIONS", v);
+    glib_format_last(v, sizeof(v), g->last[0] ? g->last : NULL);
+    stat_card(246, "LAST PLAYED", v);
+    glib_format_last(v, sizeof(v), detail.first[0] ? detail.first : NULL);
+    stat_card(362, "FIRST PLAYED", v);
+
+    font_draw(f_stat, 14, 172, "Last 7 days", TEXT, 0);
+    u32 most = 1;
+    for (int d = 0; d < 7; d++) if (detail.days[d] > most) most = detail.days[d];
+    ScePspDateTime now;
+    sceRtcGetCurrentClockLocalTime(&now);
+    int weekday = sceRtcGetDayOfWeek(now.year, now.month, now.day); // 0 Sunday
+    static const char names[] = "SMTWTFS";
+    for (int d = 0; d < 7; d++) {
+        float x = 24 + d * 64, h = detail.days[d] ? 2 + 48.0f * detail.days[d] / most : 2;
+        ui_rrect(x, 234 - h, 36, h, h > 6 ? 3 : 1, d == 6 ? ACCENT : HEX(0x46506F, 255));
+        char day[2] = { names[(weekday + d + 1) % 7], 0 };
+        font_draw_center(f_chip, x + 18, 246, day, MUTED);
+        if (detail.days[d]) {
+            char t[16];
+            glib_format_time(t, sizeof(t), detail.days[d]);
+            font_draw_center(f_chip, x + 18, 230 - h, t, MUTED);
+        }
+    }
+    int gl[] = { ICON_CROSS, ICON_CIRCLE };
+    const char *l[] = { "Play", "Back" };
+    draw_hints(gl, l, 2);
+    draw_fail();
+    ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
+    gfx_end();
+}
+
 void games_draw(float dt)
 {
+    if (page >= 0) {
+        page_draw();
+        return;
+    }
     gfx_begin(BG);
     draw_top_bar();
     int back[] = { ICON_CIRCLE };
@@ -214,12 +354,15 @@ void games_draw(float dt)
         if (tab == TAB_ALL) font_draw_right(f_small, SCREEN_W - 17, 42, sort_names[sort], DIM);
         draw_grid(dt);
         if (tab == TAB_ALL) {
-            int g[] = { ICON_SQUARE, ICON_CIRCLE };
-            const char *l[] = { "Sort", "Back" };
-            draw_hints(g, l, 2);
+            int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_SQUARE, ICON_CIRCLE };
+            const char *l[] = { "Details", "Play", "Sort", "Back" };
+            draw_hints(g, l, 4);
         } else {
-            draw_hints(back, back_l, 1);
+            int g[] = { ICON_CROSS, ICON_TRIANGLE, ICON_CIRCLE };
+            const char *l[] = { "Details", "Play", "Back" };
+            draw_hints(g, l, 3);
         }
+        draw_fail();
     }
     ui_volume(f_small, HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();

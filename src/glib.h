@@ -41,6 +41,17 @@ const Texture *glib_icon(int index);
 const char *glib_last_title(void);
 int glib_last_game(void); // index into games, or -1
 
+// The game page: seconds played on each of the last 7 days (today last), the
+// first session, and the file's size.
+typedef struct {
+    u32 days[7];
+    char first[20];
+    u64 bytes;
+} GameDetail;
+void glib_detail(int index, GameDetail *d);
+u8 *glib_pic1(int index, int *w, int *h); // RGBA, or NULL; free() it
+int glib_launch(int index);               // starts the game; returns only on failure
+
 void glib_format_time(char *out, int size, u32 seconds); // "42h 10m", "52m"
 void glib_format_last(char *out, int size, const char *last); // "Today", "3 days ago", "Oct 2"
 

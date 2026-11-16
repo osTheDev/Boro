@@ -8,12 +8,19 @@
 #include <string.h>
 #include <strings.h>
 #include <zlib.h>
+#include <psploadexec_kernel.h>
+#include <systemctrl.h>
+#include <systemctrl_se.h>
 #include "image.h"
 
 Game *games;
 int game_count;
 
 static char log_path[256], now_path[256], app_dir[256], dev[8] = "ms0";
+// The ISO reader keeps static buffers: one reader at a time (scan or page).
+static SceUID disc_lock = -1;
+static void lock(void) { if (disc_lock >= 0) sceKernelWaitSema(disc_lock, 1, NULL); }
+static void unlock(void) { if (disc_lock >= 0) sceKernelSignalSema(disc_lock, 1); }
 
 // ---- Playtime log -------------------------------------------------------------
 
@@ -344,6 +351,42 @@ static int read_iso(Game *g, int want_icon, u8 **icon)
     return ok;
 }
 
+// A file under PSP_GAME in an ISO or CSO, like "PIC1.PNG".
+static u8 *iso_asset(const char *path, const char *name, u32 *size, u32 max)
+{
+    static Disc d;
+    static u8 pvd[2048];
+    u8 *out = NULL;
+    if (!disc_open(&d, path)) return NULL;
+    u32 lba, dl, ds;
+    if (disc_sector(&d, 16, pvd) && !memcmp(pvd + 1, "CD001", 5) &&
+        disc_find(&d, rd32(pvd + 156 + 2), rd32(pvd + 156 + 10), "PSP_GAME", &dl, &ds) &&
+        disc_find(&d, dl, ds, name, &lba, size))
+        out = disc_file(&d, lba, *size, max);
+    disc_close(&d);
+    return out;
+}
+
+// One part of an EBOOT.PBP: 0 PARAM.SFO, 1 ICON0, 4 PIC1.
+static u8 *pbp_asset(const char *path, int part, u32 *size, u32 max)
+{
+    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+    if (fd < 0) return NULL;
+    u32 head[10];
+    u8 *buf = NULL;
+    if (sceIoRead(fd, head, sizeof(head)) == sizeof(head) && head[0] == 0x50425000) {
+        u32 off = head[2 + part];
+        *size = head[3 + part] - off;
+        buf = *size && *size <= max ? malloc(*size) : NULL;
+        if (buf) {
+            sceIoLseek32(fd, off, PSP_SEEK_SET);
+            if (sceIoRead(fd, buf, *size) != (int)*size) { free(buf); buf = NULL; }
+        }
+    }
+    sceIoClose(fd);
+    return buf;
+}
+
 static int read_pbp(Game *g, int want_icon, u8 **icon)
 {
     SceUID fd = sceIoOpen(g->path, PSP_O_RDONLY, 0);
@@ -476,8 +519,10 @@ static int scan_thread(SceSize args, void *argp)
     scan_eboots(dir);
     for (int i = 0; i < found_count; i++) {
         Game *g = &found[i];
+        lock();
         if (ends_with(g->path, ".pbp")) read_pbp(g, 0, NULL);
         else read_iso(g, 0, NULL);
+        unlock();
     }
     qsort(found, found_count, sizeof(Game), cmp_title);
     scan_state = 2;
@@ -489,8 +534,10 @@ static int scan_thread(SceSize args, void *argp)
             Game *g = &found[i];
             if (g->icon || (pass == 0) != (g->last[0] != 0)) continue;
             u8 *px = NULL;
+            lock();
             if (ends_with(g->path, ".pbp")) read_pbp(g, 1, &px);
             else read_iso(g, 1, &px);
+            unlock();
             g->icon_px = px;
             g->icon = px ? 1 : -1;
         }
@@ -505,6 +552,7 @@ void glib_init(const char *data_dir, const char *dir)
     snprintf(app_dir, sizeof(app_dir), "%s", dir);
     const char *colon = strchr(dir, ':');
     if (colon && colon - dir < (int)sizeof(dev)) snprintf(dev, sizeof(dev), "%.*s", (int)(colon - dir), dir);
+    disc_lock = sceKernelCreateSema("boro_disc", 0, 1, 1, NULL);
     fold_now();
     read_log();
 }
@@ -583,4 +631,93 @@ void glib_format_last(char *out, int size, const char *last)
     else if (ago == 1) snprintf(out, size, "Yesterday");
     else if (ago < 7) snprintf(out, size, "%d days ago", ago);
     else snprintf(out, size, "%s %d", months[(m - 1) % 12], d);
+}
+
+// ---- Game page ----------------------------------------------------------------------
+
+u8 *glib_pic1(int index, int *w, int *h)
+{
+    if (index < 0 || index >= game_count) return NULL;
+    const Game *g = &games[index];
+    u32 size = 0;
+    lock();
+    u8 *png = ends_with(g->path, ".pbp") ? pbp_asset(g->path, 4, &size, 1024 * 1024)
+                                          : iso_asset(g->path, "PIC1.PNG", &size, 1024 * 1024);
+    unlock();
+    if (!png) return NULL;
+    u8 *px = image_decode(png, size, 0, w, h);
+    free(png);
+    return px;
+}
+
+void glib_detail(int index, GameDetail *d)
+{
+    memset(d, 0, sizeof(*d));
+    if (index < 0 || index >= game_count) return;
+    const Game *g = &games[index];
+    SceIoStat st;
+    if (sceIoGetstat(g->path, &st) >= 0) d->bytes = st.st_size;
+    ScePspDateTime now;
+    sceRtcGetCurrentClockLocalTime(&now);
+    int today = day_number(now.year, now.month, now.day);
+    int len;
+    char *buf = read_text(log_path, &len);
+    if (!buf) return;
+    for (char *line = buf; line && *line;) {
+        char *next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        char *f[6] = { 0 };
+        int n = 0;
+        for (char *p = line; n < 6 && p;) {
+            f[n++] = p;
+            p = strchr(p, '\t');
+            if (p) *p++ = 0;
+        }
+        if (n == 6 && line[0] != '#') {
+            char *cr = strchr(f[5], '\r');
+            if (cr) *cr = 0;
+            int same = !strcasecmp(f[5], g->path) || (g->type == GTYPE_PSP && g->disc_id[0] && !strcmp(f[2], g->disc_id));
+            int y, m, dd;
+            if (same && sscanf(f[0], "%d-%d-%d", &y, &m, &dd) == 3) {
+                if (!d->first[0] || strcmp(f[0], d->first) < 0) snprintf(d->first, sizeof(d->first), "%s", f[0]);
+                int ago = today - day_number(y, m, dd);
+                if (ago >= 0 && ago < 7) d->days[6 - ago] += strtoul(f[1], NULL, 10);
+            }
+        }
+        line = next;
+    }
+    free(buf);
+}
+
+// Hands the PSP over to the game the way ARK's own menu does: ISOs and CSOs
+// through the Inferno driver, EBOOTs as homebrew or PS1 games. Only returns
+// if ARK says no.
+int glib_launch(int index)
+{
+    if (index < 0 || index >= game_count) return -1;
+    const Game *g = &games[index];
+    static char path[256];
+    struct SceKernelLoadExecVSHParam param;
+    memset(&param, 0, sizeof(param));
+    param.size = sizeof(param);
+    if (!ends_with(g->path, ".pbp")) {
+        const char *boot = "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN";
+        snprintf(path, sizeof(path), "%s", boot);
+        sctrlSESetUmdFile(g->path);
+        sctrlSESetBootConfFileIndex(MODE_INFERNO);
+        param.key = "umdemu";
+        param.args = strlen(path) + 1;
+        param.argp = path;
+        return sctrlKernelLoadExecVSHWithApitype(0x123, path, &param);
+    }
+    snprintf(path, sizeof(path), "%s", g->path);
+    sctrlSESetUmdFile("");
+    param.args = strlen(path) + 1;
+    param.argp = path;
+    if (g->type == GTYPE_PS1) {
+        param.key = "pops";
+        return sctrlKernelLoadExecVSHWithApitype(0x144, path, &param);
+    }
+    param.key = "game";
+    return sctrlKernelLoadExecVSHWithApitype(0x141, path, &param);
 }
