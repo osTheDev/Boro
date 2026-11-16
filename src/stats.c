@@ -13,6 +13,7 @@
 #include "library.h"
 #include "player.h"
 #include "ui.h"
+#include "skin.h"
 
 // A play counts once a song is heard for 30 seconds, or half of a short one.
 #define PLAY_MS 30000
@@ -324,16 +325,19 @@ void stats_compute(int period, Stats *s)
 
 static int period, top_kind;
 static Stats st;
+static GameStats gs;
 static float t_now, refresh_t, grow;
-static Texture *t_glow;
 
 static Font *S(int weight, int px) { return ui_font(FAMILY_SORA, weight, px); }
+
+static void refresh_games(void) { glib_stats(period == PERIOD_WEEK ? 7 : period == PERIOD_MONTH ? 28 : 0, &gs); }
 
 void stats_enter(void)
 {
     period = PERIOD_WEEK;
     top_kind = TOP_SONGS;
     stats_compute(period, &st);
+    refresh_games();
     refresh_t = 0;
     grow = 0;
 }
@@ -355,213 +359,273 @@ int stats_update(const Input *in, float dt)
     if (changed || refresh_t > 5) {
         refresh_t = 0;
         stats_compute(period, &st);
+        refresh_games();
     }
     return (p & PSP_CTRL_CIRCLE) != 0;
 }
 
-static void card(float x, float y, float w, float h)
+// ---- Drawing: the Boro skin (Stream or Web, as Settings > Home style) -------
+
+
+static const char *const kind_names[TOP_KINDS + 2] = { "Tracks", "Artists", "Albums", "Games", "Books" };
+
+// One entry of the top list: its title, a second line, the number on the
+// right and how full its bar is.
+typedef struct {
+    const char *title, *sub;
+    char value[24];
+    float frac;
+    const Texture *art;
+    int art_wide; // a game icon, wider than tall
+} Top;
+
+static int top_count(int kind)
 {
-    ui_rrect(x, y, w, h, 8, CARD);
-    ui_ring(x, y, w, h, 8, EDGE);
+    if (kind == TOP_KINDS) return gs.top_count;
+    if (kind == TOP_KINDS + 1) return st.top_book_count;
+    return st.top_count[kind];
 }
 
-static void key_cap(Font *f, float x, float cy, const char *k)
+static void top_item(int kind, int i, Top *t)
 {
-    float w = font_width(f, k, 0) + 8;
-    ui_ring(x, cy - 6, w, 12, 3, HEX(0x3A3D48, 255));
-    font_draw(f, x + 4, cy + 3, k, MUTED, 0);
-}
-
-static void draw_top_row(int kind, int i, float x, float y, float w)
-{
-    int id = st.top[kind][i], seed = id;
-    const char *title = "", *sub = "";
-    int art_song = -1;
-    if (kind == TOP_SONGS) {
-        const Song *s = &lib.songs[id];
-        title = song_title(s);
-        sub = song_artist(s);
-        art_song = id;
-        seed = s->album_id;
-    } else if (kind == TOP_ARTISTS) {
-        title = lib.artists[id].name;
-        art_song = lib.artists[id].art_song;
+    memset(t, 0, sizeof(*t));
+    t->sub = "";
+    if (kind == TOP_KINDS) {
+        t->title = gs.top_title[i];
+        glib_format_time(t->value, sizeof(t->value), gs.top_secs[i]);
+        t->frac = gs.top_secs[0] ? (float)gs.top_secs[i] / gs.top_secs[0] : 0;
+        t->art = glib_icon(gs.top_game[i]);
+        t->art_wide = 1;
+    } else if (kind == TOP_KINDS + 1) {
+        const char *dir = book_names[st.top_book[i]], *slash = strrchr(dir, '/');
+        t->title = slash ? slash + 1 : dir;
+        for (int j = 0; j < book_count; j++)
+            if (!strcmp(books[j].dir, dir)) {
+                t->title = books[j].title;
+                t->sub = books[j].author;
+                if (books[j].cover[0]) t->art = art_get_file(books[j].cover, ART_COVER_S);
+                break;
+            }
+        stats_format_time(t->value, sizeof(t->value), st.top_book_ms[i]);
+        t->frac = st.top_book_ms[0] ? (float)st.top_book_ms[i] / st.top_book_ms[0] : 0;
     } else {
-        title = lib.albums[id].name;
-        sub = lib.albums[id].artist;
-        art_song = lib.albums[id].art_song;
+        int id = st.top[kind][i], art_song = -1;
+        if (kind == TOP_SONGS) {
+            t->title = song_title(&lib.songs[id]);
+            t->sub = song_artist(&lib.songs[id]);
+            art_song = id;
+        } else if (kind == TOP_ARTISTS) {
+            t->title = lib.artists[id].name;
+            art_song = lib.artists[id].art_song;
+        } else {
+            t->title = lib.albums[id].name;
+            t->sub = lib.albums[id].artist;
+            art_song = lib.albums[id].art_song;
+        }
+        if (art_song >= 0) t->art = art_get(art_song, kind == TOP_ARTISTS ? ART_ROUND : ART_SMALL);
+        snprintf(t->value, sizeof(t->value), "%d", st.top_plays[kind][i]);
+        t->frac = (float)st.top_plays[kind][i] / st.top_plays[kind][0];
     }
-    (void)sub;
-    Font *fn = S(700, 9);
-    char num[4];
-    snprintf(num, sizeof(num), "%d", i + 1);
-    font_draw(fn, x, y + 14, num, i == 0 ? ACCENT : MUTED, 0);
-    const Texture *t = art_song >= 0 ? art_get(art_song, kind == TOP_ARTISTS ? ART_ROUND : ART_SMALL) : NULL;
-    if (t) gfx_tex(t, x + 12, y + 2, 20, 20, 0xFFFFFFFF);
-    else ui_placeholder_art(x + 12, y + 2, 20, kind == TOP_ARTISTS ? 10 : 3, seed);
-    char plays[12];
-    snprintf(plays, sizeof(plays), "%d", st.top_plays[kind][i]);
-    Font *fp = S(400, 9);
-    float pw = font_width(fp, plays, 0), tx = x + 38, tw = w - 38 - pw - 8;
-    font_draw_fit(S(700, 9), tx, y + 10, title, TEXT, tw);
-    ui_rrect(tx, y + 15, tw, 3, 1.5f, RGBA(255, 255, 255, 26));
-    float k = (float)st.top_plays[kind][i] / st.top_plays[kind][0];
-    ui_rrect(tx, y + 15, fmaxf(3, tw * k * grow), 3, 1.5f, ACCENT);
-    font_draw(fp, x + w - pw, y + 14, plays, HEX(0xC9CBD4, 255), 0);
+}
+
+static void draw_art(const Top *t, float x, float y, float size, int seed)
+{
+    gfx_filter(1);
+    if (!t->art) { ui_placeholder_art(x, y, size, 3, seed); return; }
+    float w = size, h = size;
+    if (t->art_wide) w = size * 1.8f;
+    else if (t->art->w != t->art->h) w = size * t->art->w / (float)t->art->h;
+    gfx_tex(t->art, x, y, w, h, 0xFFFFFFFF);
+}
+
+static const char *period_label(void)
+{
+    return period == PERIOD_WEEK ? "THIS WEEK" : period == PERIOD_MONTH ? "THE LAST 4 WEEKS" : "ALL TIME";
+}
+
+static void key_numbers(char v[4][48], char note[4][48])
+{
+    snprintf(v[0], 48, "%d", st.plays);
+    if (st.prev_plays > 0) {
+        int pct = (st.plays - st.prev_plays) * 100 / st.prev_plays;
+        snprintf(note[0], 48, "%+d%% vs last %s", pct, period == PERIOD_WEEK ? "week" : "month");
+    } else snprintf(note[0], 48, "%s", period == PERIOD_ALL ? "Since day one" : "First one");
+    snprintf(v[1], 48, "%d day%s", st.streak, st.streak == 1 ? "" : "s");
+    snprintf(note[1], 48, "%s", st.streak ? "Keep it going" : "Play a song today");
+    if (st.top_count[TOP_ARTISTS]) {
+        snprintf(v[2], 48, "%s", lib.artists[st.top[TOP_ARTISTS][0]].name);
+        snprintf(note[2], 48, "%d plays", st.top_plays[TOP_ARTISTS][0]);
+    } else {
+        snprintf(v[2], 48, "\xE2\x80\x94");
+        snprintf(note[2], 48, "No plays yet");
+    }
+    if (st.station[0]) {
+        snprintf(v[3], 48, "%s", st.station);
+        stats_format_time(note[3], 48, st.station_ms);
+    } else {
+        snprintf(v[3], 48, "\xE2\x80\x94");
+        snprintf(note[3], 48, "No radio yet");
+    }
+}
+
+static void stream_draw(void)
+{
+    skin_stream_back(HEX(0x8A6A3C, 255));
+    skin_stream_header("Stats");
+    Font *fp = S(600, 9);
+    float x = 150;
+    static const char *names[PERIOD_COUNT] = { "Week", "Month", "All time" };
+    for (int i = 0; i < PERIOD_COUNT; i++) x += skin_pill(fp, x, 12, names[i], i == period) + 4;
+
+    // Hero: everything listened and played in the period.
+    char total[24], music[24], games[24], books_t[24], sub[160], label[64];
+    stats_format_time(total, sizeof(total), st.ms + st.book_ms + gs.seconds * 1000);
+    stats_format_time(music, sizeof(music), st.ms);
+    stats_format_time(games, sizeof(games), gs.seconds * 1000);
+    stats_format_time(books_t, sizeof(books_t), st.book_ms);
+    snprintf(label, sizeof(label), "%s \xC2\xB7 LISTENED AND PLAYED", period_label());
+    font_draw(S(400, 9), 16, 50, label, ACCENT, 1);
+    font_draw(S(700, 26), 16, 78, total, TEXT, 0);
+    snprintf(sub, sizeof(sub), "Music %s \xC2\xB7 Games %s \xC2\xB7 Books %s \xC2\xB7 %d-day streak", music, games, books_t, st.streak);
+    font_draw_fit(S(400, 10), 16, 94, sub, MUTED, 280);
+
+    // Listening per day (week, month) beside it.
+    u32 max = 1;
+    for (int i = 0; i < st.bar_count; i++) if (st.bars[i] > max) max = st.bars[i];
+    float span = 160, bw = 12, gap = (span - st.bar_count * bw) / (st.bar_count > 1 ? st.bar_count - 1 : 1), bx = SCREEN_W - 16 - span;
+    for (int i = 0; i < st.bar_count; i++) {
+        float h = (st.bars[i] ? fmaxf(3, 54.0f * st.bars[i] / max) : 3) * grow, xx = bx + i * (bw + gap);
+        ui_rrect(xx, 92 - h, bw, h, 3, i == st.today_bar ? ACCENT : HEX(0x5A6078, 255));
+        font_draw_center(S(400, 7), xx + bw / 2, 104, st.bar_labels[i], MUTED);
+    }
+
+    // Key numbers, as cards like the home tiles.
+    char v[4][48], note[4][48];
+    key_numbers(v, note);
+    static const char *labels[4] = { "PLAYS", "STREAK", "TOP ARTIST", "TOP STATION" };
+    float cw = (SCREEN_W - 32 - 3 * 8) / 4.0f;
+    for (int i = 0; i < 4; i++) {
+        float cx = 16 + i * (cw + 8), cy = 114;
+        skin_glass(cx, cy, cw, 44, 0);
+        font_draw(S(400, 8), cx + 8, cy + 12, labels[i], MUTED, 0.5f);
+        font_draw_fit(S(700, 13), cx + 8, cy + 28, v[i], TEXT, cw - 16);
+        font_draw_fit(S(400, 8), cx + 8, cy + 39, note[i], i == 0 && st.prev_plays > 0 ? ACCENT : MUTED, cw - 16);
+    }
+
+    // The top list, with its kinds as chips.
+    float ty = 164, tw = SCREEN_W - 32;
+    skin_glass(16, ty, tw, 80, 0);
+    char head[32];
+    snprintf(head, sizeof(head), "Top %s", kind_names[top_kind]);
+    for (char *c = head + 4; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
+    font_draw(S(700, 11), 24, ty + 15, head, TEXT, 0);
+    x = 112;
+    for (int i = 0; i < TOP_KINDS + 2; i++) x += skin_pill(fp, x, ty + 5, kind_names[i], i == top_kind) + 4;
+    int n = top_count(top_kind);
+    if (!n) font_draw(S(400, 10), 24, ty + 46, top_kind == TOP_KINDS ? "No games played yet" : top_kind > TOP_KINDS ? "No books heard yet" : "Nothing played yet", MUTED, 0);
+    for (int i = 0; i < n && i < 3; i++) {
+        Top t;
+        top_item(top_kind, i, &t);
+        float ry = ty + 26 + i * 17;
+        font_draw(S(700, 9), 24, ry + 11, (char[2]){ (char)('1' + i), 0 }, i == 0 ? ACCENT : MUTED, 0);
+        draw_art(&t, 36, ry, 14, i + top_kind * 7);
+        float tx = t.art_wide ? 66 : 56;
+        font_draw_fit(S(600, 9), tx, ry + 11, t.title, TEXT, 150 - (tx - 56));
+        font_draw_fit(S(400, 9), 210, ry + 11, t.sub, MUTED, 80);
+        ui_rrect(296, ry + 6, 110, 3, 1.5f, RGBA(255, 255, 255, 26));
+        ui_rrect(296, ry + 6, fmaxf(3, 110 * t.frac * grow), 3, 1.5f, ACCENT);
+        font_draw_right(S(700, 9), SCREEN_W - 26, ry + 11, t.value, TEXT);
+    }
+
+    Font *fh = S(400, 9);
+    float hx = SCREEN_W - 16 - ui_hint_width(fh, ICON_CIRCLE, "Back");
+    ui_hint(fh, hx, SCREEN_H - 9, ICON_CIRCLE, "Back", MUTED);
+    hx -= 12 + ui_hint_arrows_width(fh, "Top list");
+    ui_hint_arrows(fh, hx, SCREEN_H - 9, 1, "Top list", MUTED);
+    hx -= 12 + font_width(fh, "L/R Period", 0);
+    font_draw(fh, hx, SCREEN_H - 9, "L/R Period", MUTED, 0);
+}
+
+static void web_draw(void)
+{
+    Font *f_px = ui_font(FAMILY_SILKSCREEN, 400, 8), *f_h = ui_font(FAMILY_SERIF, 700, 22);
+    Font *f_s = ui_font(FAMILY_SERIF, 400, 12), *f_sb = ui_font(FAMILY_SERIF, 700, 13);
+    skin_web_window("BORO STATS - NAVIGATOR");
+    font_draw(f_h, 24, 52, "My Listening Stats", W_MAROON, 0);
+    static const char *names[PERIOD_COUNT] = { "Week", "Month", "All time" };
+    float x = 456;
+    for (int i = PERIOD_COUNT - 1; i >= 0; i--) {
+        char t[24];
+        snprintf(t, sizeof(t), i == period ? "[ %s ]" : "%s", names[i]);
+        x -= font_width(f_sb, t, 0);
+        font_draw(f_sb, x, 48, t, i == period ? W_BLACK : W_LINK, 0);
+        x -= 10;
+    }
+    gfx_rect(24, 58, 432, 1, W_GRAY);
+    gfx_rect(24, 59, 432, 1, W_WHITE);
+
+    char total[24], music[24], games[24], books_t[24], line[200];
+    stats_format_time(total, sizeof(total), st.ms + st.book_ms + gs.seconds * 1000);
+    stats_format_time(music, sizeof(music), st.ms);
+    stats_format_time(games, sizeof(games), gs.seconds * 1000);
+    stats_format_time(books_t, sizeof(books_t), st.book_ms);
+    font_draw(f_sb, 24, 78, period == PERIOD_ALL ? "Total, all time:" : period == PERIOD_MONTH ? "Total, 4 weeks:" : "Total this week:", W_BLACK, 0);
+    float cx = skin_counter(140, 64, total);
+    snprintf(line, sizeof(line), "Music %s \xC2\xB7 Games %s \xC2\xB7 Books %s", music, games, books_t);
+    font_draw_fit(f_s, cx + 10, 78, line, W_BLACK, 456 - cx - 10);
+
+    // The top list as a table.
+    skin_bevel(24, 88, 212, 98, 1, W_WHITE);
+    gfx_rect(26, 90, 208, 14, W_NAVY);
+    char head[32];
+    snprintf(head, sizeof(head), "Top %s", kind_names[top_kind]);
+    font_draw(f_sb, 30, 101, head, W_WHITE, 0);
+    int n = top_count(top_kind);
+    if (!n) font_draw(f_s, 30, 120, "Nothing yet!", W_BLACK, 0);
+    for (int i = 0; i < n && i < 5; i++) {
+        Top t;
+        top_item(top_kind, i, &t);
+        float ry = 117 + i * 16;
+        char num[8];
+        snprintf(num, sizeof(num), "%d.", i + 1);
+        font_draw(f_s, 30, ry, num, W_BLACK, 0);
+        font_draw_fit(f_s, 44, ry, t.title, W_LINK, 130);
+        gfx_rect(44, ry + 2, fminf(130, font_width(f_s, t.title, 0)), 1, W_LINK);
+        font_draw_right(f_s, 230, ry, t.value, W_BLACK);
+    }
+
+    // Listening per day, like a little chart picture.
+    skin_bevel(244, 88, 212, 98, 1, HEX(0xFFFFCC, 255));
+    font_draw(f_sb, 250, 101, period == PERIOD_ALL ? "Listening per month" : period == PERIOD_MONTH ? "Listening per week" : "Listening per day", W_BLACK, 0);
+    u32 max = 1;
+    for (int i = 0; i < st.bar_count; i++) if (st.bars[i] > max) max = st.bars[i];
+    float bw = 14, gap = (190 - st.bar_count * bw) / (st.bar_count > 1 ? st.bar_count - 1 : 1);
+    for (int i = 0; i < st.bar_count; i++) {
+        float h = (st.bars[i] ? fmaxf(2, 58.0f * st.bars[i] / max) : 2) * grow, bx = 254 + i * (bw + gap);
+        gfx_rect(bx, 170 - h, bw, h, W_BLACK);
+        gfx_rect(bx + 1, 171 - h, bw - 2, h - 2, i == st.today_bar ? HEX(0xFF0000, 255) : HEX(0x0000FF, 255));
+        font_draw_center(f_px, bx + bw / 2, 181, st.bar_labels[i], W_BLACK);
+    }
+
+    char v[4][48], note[4][48];
+    key_numbers(v, note);
+    snprintf(line, sizeof(line), "Streak: %s!  \xC2\xB7  Plays: %s  \xC2\xB7  Top artist: %s  \xC2\xB7  Top station: %s", v[1], v[0], v[2], v[3]);
+    font_draw_fit(f_s, 24, 202, line, W_BLACK, 432);
+    font_draw(f_sb, 24, 224, "<< Back to Boro Home", W_LINK, 0);
+    gfx_rect(24, 226, font_width(f_sb, "<< Back to Boro Home", 0), 1, W_LINK);
+    char more[48];
+    snprintf(more, sizeof(more), "DOWN: TOP %s", kind_names[(top_kind + 1) % (TOP_KINDS + 2)]);
+    for (char *c = more; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+    font_draw_right(f_px, 456, 238, more, W_GRAY);
+    skin_web_status("L/R PERIOD   UP/DOWN TOP LIST   O BACK   DONE");
 }
 
 void stats_draw(float dt)
 {
     (void)dt;
-    if (!t_glow) t_glow = tex_glow(128);
     gfx_begin(BG);
-    float sa = 1 + 0.15f * (0.5f + 0.5f * sinf(t_now * 0.45f));
-    float ax = 90 + 20 * sinf(t_now * 0.45f), ay = 50 + 9 * sinf(t_now * 0.45f);
-    gfx_tex(t_glow, ax - 150 * sa, ay - 130 * sa, 300 * sa, 260 * sa, color_alpha(ACCENT, 0.25f));
-
-    // Header: title, period tabs between L and R, battery.
-    Font *f8 = S(400, 8), *f10 = S(700, 10);
-    font_draw(S(800, 15), 14, 25, "Stats", TEXT, 0);
-    float x = 70;
-    key_cap(f8, x, 20, "L");
-    x += 20;
-    static const char *names[PERIOD_COUNT] = { "Week", "Month", "All time" };
-    for (int i = 0; i < PERIOD_COUNT; i++) {
-        float w = font_width(f10, names[i], 0) + 16;
-        if (i == period) ui_rrect(x, 12, w, 16, 8, ACCENT);
-        font_draw(f10, x + 8, 24, names[i], i == period ? BG : HEX(0xB5B8C4, 255), 0);
-        x += w + 4;
-    }
-    key_cap(f8, x + 2, 20, "R");
-    ui_battery(S(400, 10), SCREEN_W - 14, 20, HEX(0xB5B8C4, 255));
-
-    // Key numbers.
-    char v[4][48], note[4][48];
-    stats_format_time(v[0], sizeof(v[0]), st.ms + st.book_ms);
-    if (st.book_ms) {
-        char bt[24];
-        stats_format_time(bt, sizeof(bt), st.book_ms);
-        snprintf(note[0], sizeof(note[0]), "Books %s, radio too", bt);
-    } else snprintf(note[0], sizeof(note[0]), "Includes radio");
-    snprintf(v[1], sizeof(v[1]), "%d", st.plays);
-    if (st.prev_plays > 0) {
-        int pct = (st.plays - st.prev_plays) * 100 / st.prev_plays;
-        snprintf(note[1], sizeof(note[1]), "%+d%% vs last %s", pct, period == PERIOD_WEEK ? "week" : "month");
-    } else snprintf(note[1], sizeof(note[1]), "%s", period == PERIOD_ALL ? "Since day one" : "First one");
-    snprintf(v[2], sizeof(v[2]), "%d day%s", st.streak, st.streak == 1 ? "" : "s");
-    snprintf(note[2], sizeof(note[2]), "%s", st.streak ? "Keep it going" : "Play a song today");
-    if (st.top_count[TOP_ARTISTS]) {
-        snprintf(v[3], sizeof(v[3]), "%s", lib.artists[st.top[TOP_ARTISTS][0]].name);
-        snprintf(note[3], sizeof(note[3]), "%d plays", st.top_plays[TOP_ARTISTS][0]);
-    } else {
-        snprintf(v[3], sizeof(v[3]), "\xE2\x80\x94");
-        snprintf(note[3], sizeof(note[3]), "No plays yet");
-    }
-    static const char *labels[4] = { "LISTENED", "PLAYS", "STREAK", "TOP ARTIST" };
-    float kw = (SCREEN_W - 28 - 24) / 4.0f;
-    for (int i = 0; i < 4; i++) {
-        float kx = 14 + i * (kw + 8), ky = 38;
-        card(kx, ky, kw, 44);
-        font_draw(f8, kx + 8, ky + 12, labels[i], LABEL, 0.5f);
-        font_draw_fit(S(700, 15), kx + 8, ky + 30, v[i], TEXT, kw - 16);
-        font_draw_fit(f8, kx + 8, ky + 40, note[i], i == 1 && st.prev_plays > 0 ? ACCENT : MUTED, kw - 16);
-    }
-
-    // Listening per day (or week, or month).
-    float lx = 14, lw = (SCREEN_W - 28 - 10) / 2.0f, ly = 90, lh = 110;
-    card(lx, ly, lw, lh);
-    static const char *bar_titles[PERIOD_COUNT] = { "Listening per day", "Listening per week", "Listening per month" };
-    font_draw(S(400, 9), lx + 8, ly + 13, bar_titles[period], LABEL, 0);
-    u32 max = 1;
-    for (int i = 0; i < st.bar_count; i++) if (st.bars[i] > max) max = st.bars[i];
-    float bx = lx + 8, bw = (lw - 16 - (st.bar_count - 1) * 6) / st.bar_count, base = ly + lh - 16;
-    for (int i = 0; i < st.bar_count; i++) {
-        float h = st.bars[i] ? fmaxf(2, 66.0f * st.bars[i] / max) : 2;
-        h *= grow;
-        u32 c = i == st.today_bar ? ACCENT : RGBA(255, 255, 255, 56);
-        gfx_rect(bx + i * (bw + 6), base - h, bw, h, c);
-        font_draw_center(S(400, 7), bx + i * (bw + 6) + bw / 2, base + 10, st.bar_labels[i], MUTED);
-    }
-
-    // Top radio station.
-    float sy = ly + lh + 6;
-    card(lx, sy, lw, 32);
-    float rx = lx + 9, rcy = sy + 16;
-    ui_ring(rx + 4, rcy - 2, 4, 4, 2, ACCENT);
-    ui_ring(rx, rcy - 6, 12, 12, 6, color_alpha(ACCENT, 0.7f));
-    font_draw(f8, lx + 28, sy + 13, "Top radio station", LABEL, 0);
-    char station[96], sm[24] = "";
-    if (st.station[0]) {
-        snprintf(station, sizeof(station), "%s", st.station);
-        stats_format_time(sm, sizeof(sm), st.station_ms);
-    } else snprintf(station, sizeof(station), "No radio yet");
-    Font *fs = S(700, 11);
-    float smw = font_width(fs, sm, 0);
-    font_draw_fit(S(700, 10), lx + 28, sy + 26, station, TEXT, lw - 40 - smw);
-    if (sm[0]) font_draw_right(fs, lx + lw - 9, sy + 21, sm, TEXT);
-
-    // Top songs, artists or albums.
-    float tx = lx + lw + 10, ty = ly, th = lh + 38;
-    card(tx, ty, lw, th);
-    static const char *top_titles[TOP_KINDS + 2] = { "Top tracks", "Top artists", "Top albums", "Top games", "Top books" };
-    font_draw(S(400, 9), tx + 8, ty + 13, top_titles[top_kind], LABEL, 0);
-    font_draw_right(S(400, 9), tx + lw - 8, ty + 13, top_kind == TOP_KINDS ? "Played" : top_kind > TOP_KINDS ? "Listened" : "Plays", LABEL);
-    if (top_kind == TOP_KINDS + 1) {
-        if (!st.top_book_count) font_draw(S(400, 10), tx + 8, ty + 40, "No books heard yet", MUTED, 0);
-        for (int i = 0; i < st.top_book_count; i++) {
-            float ry = ty + 20 + i * 25, rx = tx + 8, rw = lw - 16;
-            const char *dir = book_names[st.top_book[i]], *title = strrchr(dir, '/');
-            title = title ? title + 1 : dir;
-            int bi = -1;
-            for (int j = 0; j < book_count; j++) if (!strcmp(books[j].dir, dir)) { bi = j; title = books[j].title; break; }
-            char tm[24];
-            stats_format_time(tm, sizeof(tm), st.top_book_ms[i]);
-            font_draw(S(700, 9), rx, ry + 15, (char[2]){ (char)('1' + i), 0 }, i == 0 ? ACCENT : MUTED, 0);
-            const Texture *c = bi >= 0 && books[bi].cover[0] ? art_get_file(books[bi].cover, ART_COVER_S) : NULL;
-            if (c) {
-                float h = 22, w = h * c->w / (float)c->h;
-                if (w > 22) w = 22;
-                gfx_filter(1);
-                gfx_tex(c, rx + 12 + (22 - w) / 2, ry + 1, w, h, 0xFFFFFFFF);
-            } else ui_placeholder_art(rx + 12, ry + 2, 20, 3, i + 21);
-            Font *ft = S(700, 9);
-            float tw = font_width(ft, tm, 0);
-            font_draw_fit(S(600, 10), rx + 40, ry + 16, title, TEXT, rw - 46 - tw);
-            font_draw(ft, rx + rw - tw, ry + 16, tm, HEX(0xC9CBD4, 255), 0);
-        }
-    } else if (top_kind == TOP_KINDS) {
-        GameStats gs;
-        glib_stats(period == PERIOD_WEEK ? 7 : period == PERIOD_MONTH ? 28 : 0, &gs);
-        if (!gs.top_count) font_draw(S(400, 10), tx + 8, ty + 40, "No games played yet", MUTED, 0);
-        for (int i = 0; i < gs.top_count; i++) {
-            float ry = ty + 20 + i * 25, rx = tx + 8, rw = lw - 16;
-            char tm[24];
-            glib_format_time(tm, sizeof(tm), gs.top_secs[i]);
-            font_draw(S(700, 9), rx, ry + 15, (char[2]){ (char)('1' + i), 0 }, MUTED, 0);
-            const Texture *icon = glib_icon(gs.top_game[i]);
-            if (icon) { gfx_filter(1); gfx_tex(icon, rx + 12, ry + 3, 36, 20, 0xFFFFFFFF); }
-            else ui_placeholder_art(rx + 12, ry + 3, 20, 3, i + 11);
-            Font *ft = S(700, 9);
-            float tw = font_width(ft, tm, 0);
-            font_draw_fit(S(600, 10), rx + 54, ry + 16, gs.top_title[i], TEXT, rw - 60 - tw);
-            font_draw(ft, rx + rw - tw, ry + 16, tm, HEX(0xC9CBD4, 255), 0);
-        }
-    } else {
-        if (!st.top_count[top_kind]) font_draw(S(400, 10), tx + 8, ty + 40, "Nothing played yet", MUTED, 0);
-        for (int i = 0; i < st.top_count[top_kind]; i++) draw_top_row(top_kind, i, tx + 8, ty + 20 + i * 25, lw - 16);
-    }
-
-    // Hints.
-    static const char *next_names[TOP_KINDS + 2] = { "Artists", "Albums", "Games", "Books", "Tracks" };
-    char down[32];
-    snprintf(down, sizeof(down), "Down: %s", next_names[top_kind]);
-    Font *fh = S(400, 9);
-    float hx = SCREEN_W - 14 - ui_hint_width(fh, ICON_CIRCLE, "Back");
-    ui_hint(fh, hx, SCREEN_H - 8, ICON_CIRCLE, "Back", LABEL);
-    hx -= 12 + font_width(fh, down, 0);
-    font_draw(fh, hx, SCREEN_H - 8, down, LABEL, 0);
-    hx -= 12 + font_width(fh, "L/R Period", 0);
-    font_draw(fh, hx, SCREEN_H - 8, "L/R Period", LABEL, 0);
+    if (skin_web()) web_draw();
+    else stream_draw();
     ui_volume(S(700, 10), HEX(0x1A1C24, 240), HEX(0x2E3240, 255), ACCENT, TEXT);
     gfx_end();
 }

@@ -1,4 +1,5 @@
 #include "home.h"
+#include "skin.h"
 
 #include <math.h>
 #include <pspctrl.h>
@@ -708,34 +709,6 @@ static void stream_draw(void)
 
 // ---- Web: Boro as an early-internet home page ----------------------------------
 
-#define W_TEAL HEX(0x008080, 255)
-#define W_TEAL2 HEX(0x007676, 255)
-#define W_FACE HEX(0xD4D0C8, 255)
-#define W_SILVER HEX(0xC0C0C0, 255)
-#define W_NAVY HEX(0x000080, 255)
-#define W_WHITE HEX(0xFFFFFF, 255)
-#define W_BLACK HEX(0x000000, 255)
-#define W_DARK HEX(0x404040, 255)
-#define W_GRAY HEX(0x808080, 255)
-#define W_LINK HEX(0x0000EE, 255)
-#define W_MAROON HEX(0x800000, 255)
-
-static void bevel(float x, float y, float w, float h, int down, u32 face)
-{
-    u32 hi = down ? W_DARK : W_WHITE, lo = down ? W_WHITE : W_DARK;
-    gfx_rect(x, y, w, h, face);
-    gfx_rect(x, y, w, 1, hi);
-    gfx_rect(x, y, 1, h, hi);
-    gfx_rect(x, y + h - 1, w, 1, lo);
-    gfx_rect(x + w - 1, y, 1, h, lo);
-}
-
-static void dotted_rect(float x, float y, float w, float h, u32 c)
-{
-    for (float i = 0; i < w; i += 2) { gfx_rect(x + i, y, 1, 1, c); gfx_rect(x + i, y + h - 1, 1, 1, c); }
-    for (float i = 0; i < h; i += 2) { gfx_rect(x, y + i, 1, 1, c); gfx_rect(x + w - 1, y + i, 1, 1, c); }
-}
-
 // Little pixel icons, 3 screen pixels per dot.
 static void pixel_icon(int tile, float x, float y, u32 c)
 {
@@ -762,12 +735,12 @@ static void web_draw(void)
         for (int x = ((y / 16) & 1) * 16; x < SCREEN_W; x += 32) gfx_rect(x, y, 16, 16, W_TEAL2);
 
     // The browser window.
-    bevel(8, 6, 464, 245, 0, W_SILVER);
+    skin_bevel(8, 6, 464, 245, 0, W_SILVER);
     gfx_gradient(11, 9, 458, 15, W_NAVY, HEX(0x1084D0, 255), W_NAVY, HEX(0x1084D0, 255));
     font_draw(f_pxb, 16, 20, "BORO HOME PAGE - NAVIGATOR", W_WHITE, 0);
     static const char *const box[3] = { "_", "o", "x" };
     for (int i = 0; i < 3; i++) {
-        bevel(422 + i * 16, 11, 14, 11, 0, W_SILVER);
+        skin_bevel(422 + i * 16, 11, 14, 11, 0, W_SILVER);
         font_draw_center(f_px, 429 + i * 16, 20, box[i], W_BLACK);
     }
     gfx_rect(14, 28, 452, 218, W_WHITE);
@@ -787,7 +760,7 @@ static void web_draw(void)
     for (int i = 0; i < TILES; i++) {
         float x = 24 + i * 110, y = 68;
         int on = sel == i;
-        bevel(x, y, 100, 80, on, W_FACE);
+        skin_bevel(x, y, 100, 80, on, W_FACE);
         pixel_icon(i, x + 41, y + 12, on ? W_NAVY : W_BLACK);
         float tw = font_width(f_sb, tile_names[i], 0), tx = x + 50 - tw / 2;
         font_draw(f_sb, tx, y + 50, tile_names[i], on ? W_MAROON : W_LINK, 0);
@@ -798,7 +771,7 @@ static void web_draw(void)
         else if (i == SEL_GAMES) snprintf(sub, sizeof(sub), "%s", glib_last_title() ? glib_last_title() : "Games");
         else snprintf(sub, sizeof(sub), "%s", blib_current() >= 0 ? books[blib_current()].title : "Library");
         font_draw_fit(f_px, x + 6, y + 70, sub, W_BLACK, 88);
-        if (on) dotted_rect(x + 3, y + 3, 94, 74, W_BLACK);
+        if (on) skin_dotted_rect(x + 3, y + 3, 94, 74, W_BLACK);
         if (i == SEL_BOOKS && fmodf(t_now, 1.0f) < 0.6f) {
             gfx_rect(x + 64, y + 6, 30, 11, HEX(0xFF0000, 255));
             font_draw(f_pxb, x + 67, y + 15, "NEW!", HEX(0xFFFF00, 255), 0);
@@ -814,7 +787,7 @@ static void web_draw(void)
     int on = sel == SEL_STATS;
     float lw = font_width(f_sb, "This week on Boro:", 0);
     font_draw(f_sb, 24, 170, "This week on Boro:", on ? W_LINK : W_BLACK, 0);
-    if (on) { gfx_rect(24, 172, lw, 1, W_LINK); dotted_rect(21, 157, lw + 6, 18, W_BLACK); }
+    if (on) { gfx_rect(24, 172, lw, 1, W_LINK); skin_dotted_rect(21, 157, lw + 6, 18, W_BLACK); }
     float cx = 24 + lw + 10;
     for (const char *c = all; *c; c++) {
         if (*c == ' ') continue;
@@ -849,7 +822,7 @@ static void web_draw(void)
     font_draw_right(f_sb, 456, 234, "[ START: Settings ]", W_LINK);
 
     // Status bar.
-    bevel(8, 253, 464, 15, 0, W_SILVER);
+    skin_bevel(8, 253, 464, 15, 0, W_SILVER);
     if (!quit_open) hints(f_px, 264, W_BLACK);
     else font_draw(f_px, 14, 264, "Done", W_BLACK, 0);
 }
