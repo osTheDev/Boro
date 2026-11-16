@@ -1,4 +1,5 @@
 #include "stats.h"
+#include "glib.h"
 
 #include <math.h>
 #include <pspctrl.h>
@@ -298,8 +299,9 @@ int stats_update(const Input *in, float dt)
     int changed = 0;
     if (p & PSP_CTRL_LTRIGGER) { period = (period + PERIOD_COUNT - 1) % PERIOD_COUNT; changed = 1; }
     if (p & PSP_CTRL_RTRIGGER) { period = (period + 1) % PERIOD_COUNT; changed = 1; }
-    if (p & PSP_CTRL_DOWN) top_kind = (top_kind + 1) % TOP_KINDS;
-    if (p & PSP_CTRL_UP) top_kind = (top_kind + TOP_KINDS - 1) % TOP_KINDS;
+    // The top list cycles tracks, artists, albums and then games.
+    if (p & PSP_CTRL_DOWN) top_kind = (top_kind + 1) % (TOP_KINDS + 1);
+    if (p & PSP_CTRL_UP) top_kind = (top_kind + TOP_KINDS) % (TOP_KINDS + 1);
     if ((p & PSP_CTRL_SQUARE) && player_song() >= 0) player_toggle_pause();
     refresh_t += dt;
     if (changed) grow = 0;
@@ -450,14 +452,33 @@ void stats_draw(float dt)
     // Top songs, artists or albums.
     float tx = lx + lw + 10, ty = ly, th = lh + 38;
     card(tx, ty, lw, th);
-    static const char *top_titles[TOP_KINDS] = { "Top tracks", "Top artists", "Top albums" };
+    static const char *top_titles[TOP_KINDS + 1] = { "Top tracks", "Top artists", "Top albums", "Top games" };
     font_draw(S(400, 9), tx + 8, ty + 13, top_titles[top_kind], LABEL, 0);
-    font_draw_right(S(400, 9), tx + lw - 8, ty + 13, "Plays", LABEL);
-    if (!st.top_count[top_kind]) font_draw(S(400, 10), tx + 8, ty + 40, "Nothing played yet", MUTED, 0);
-    for (int i = 0; i < st.top_count[top_kind]; i++) draw_top_row(top_kind, i, tx + 8, ty + 20 + i * 25, lw - 16);
+    font_draw_right(S(400, 9), tx + lw - 8, ty + 13, top_kind == TOP_KINDS ? "Played" : "Plays", LABEL);
+    if (top_kind == TOP_KINDS) {
+        GameStats gs;
+        glib_stats(period == PERIOD_WEEK ? 7 : period == PERIOD_MONTH ? 28 : 0, &gs);
+        if (!gs.top_count) font_draw(S(400, 10), tx + 8, ty + 40, "No games played yet", MUTED, 0);
+        for (int i = 0; i < gs.top_count; i++) {
+            float ry = ty + 20 + i * 25, rx = tx + 8, rw = lw - 16;
+            char tm[24];
+            glib_format_time(tm, sizeof(tm), gs.top_secs[i]);
+            font_draw(S(700, 9), rx, ry + 15, (char[2]){ (char)('1' + i), 0 }, MUTED, 0);
+            const Texture *icon = glib_icon(gs.top_game[i]);
+            if (icon) { gfx_filter(1); gfx_tex(icon, rx + 12, ry + 3, 36, 20, 0xFFFFFFFF); }
+            else ui_placeholder_art(rx + 12, ry + 3, 20, 3, i + 11);
+            Font *ft = S(700, 9);
+            float tw = font_width(ft, tm, 0);
+            font_draw_fit(S(600, 10), rx + 54, ry + 16, gs.top_title[i], TEXT, rw - 60 - tw);
+            font_draw(ft, rx + rw - tw, ry + 16, tm, HEX(0xC9CBD4, 255), 0);
+        }
+    } else {
+        if (!st.top_count[top_kind]) font_draw(S(400, 10), tx + 8, ty + 40, "Nothing played yet", MUTED, 0);
+        for (int i = 0; i < st.top_count[top_kind]; i++) draw_top_row(top_kind, i, tx + 8, ty + 20 + i * 25, lw - 16);
+    }
 
     // Hints.
-    static const char *next_names[TOP_KINDS] = { "Artists", "Albums", "Tracks" };
+    static const char *next_names[TOP_KINDS + 1] = { "Artists", "Albums", "Games", "Tracks" };
     char down[32];
     snprintf(down, sizeof(down), "Down: %s", next_names[top_kind]);
     Font *fh = S(400, 9);

@@ -1,6 +1,6 @@
 # Boro
 
-A music and video player for the PSP (built for a PSP-3000 on ARK-5).
+A music, video and games hub for the PSP (built for a PSP-3000 on ARK-5).
 
 ## Install
 
@@ -12,7 +12,7 @@ A music and video player for the PSP (built for a PSP-3000 on ARK-5).
 
 | Button | Action |
 | --- | --- |
-| D-pad | Move between Music, Video and the stats bar |
+| D-pad | Move between Music, Video, Games and the stats bar |
 | ✕ | Open |
 | □ | Settings |
 | ○ | Exit to the XMB |
@@ -31,6 +31,16 @@ Artists in `MUSIC/RADIO/<Artist>/` are radio-only: they never show up in Albums,
 | △ or SELECT | Now playing (on an artist page △ is radio) |
 | L / R | Page through long lists; skip on Now playing |
 | ○ | Back |
+
+## Games
+
+Boro finds ISO and CSO files under `ISO/` (and its subfolders) and EBOOT games under `PSP/GAME/`, with their icons and titles. Nothing is moved or renamed.
+
+- **Recent / All Games / Collections** tabs (L / R). ✕ opens a game's page, △ plays it, □ sorts All Games.
+- **Game page:** background art, playtime, sessions, the last 7 days, ✕ Play, △ add to a collection.
+- **Collections:** your own shelves, saved in `data/collections.txt`. Hold □ for 2 s to delete one, or to remove a game from one.
+- **PSP menu order:** START on the Games screen. Pick games up with ✕ and move them; START saves by dating each ISO file or EBOOT folder, newest at the top.
+- **Playtime** comes from the Boro Playtime plugin in [Boro-Plugins](https://github.com/osTheDev/Boro-Plugins) (`boro_time.prx`), which logs each session to `data/playtime.txt`. Game time also shows on the home stats bar and the Stats page.
 
 ## Building locally
 

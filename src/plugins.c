@@ -17,8 +17,8 @@ static const char *const lists[] = { DIR "PLUGINS.TXT", "ms0:/PSP/SAVEDATA/ARK_0
 #define LISTS 2
 #define STATUS_STATE DIR "boro_status.txt"
 
-enum { BRIGHT, STATUS, HOLD, SNAP, PLUGINS };
-static const char *const files[PLUGINS] = { "boro_bright.prx", "boro_status.prx", "boro_hold.prx", "boro_snap.prx" };
+enum { BRIGHT, STATUS, HOLD, SNAP, TIME, PLUGINS };
+static const char *const files[PLUGINS] = { "boro_bright.prx", "boro_status.prx", "boro_hold.prx", "boro_snap.prx", "boro_time.prx" };
 
 // A plugin's own row (key NULL) turns it on or off; the rows under it are its options.
 typedef struct { int plugin; const char *section, *key, *label, *help; } Row;
@@ -34,6 +34,7 @@ static const Row rows[] = {
     { SNAP, NULL, NULL, "Snap", "SCREEN + R saves a screenshot" },
     { SNAP, "snap", "flash", "Edge flash", "White flash around the screen when a shot is taken" },
     { SNAP, "snap", "icon", "Camera icon", "Bottom right, with a check once it's saved" },
+    { TIME, NULL, NULL, "Boro Playtime", "Times your games for the Games page" },
 };
 #define ROW_COUNT ((int)(sizeof(rows) / sizeof(rows[0])))
 
