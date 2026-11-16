@@ -1,10 +1,10 @@
-// Boro home screen: Music / Video tiles, at-a-glance stats bar, status bar.
+// Boro home screen: Music / Video / Games tiles, at-a-glance stats bar, status bar.
 #ifndef BORO_HOME_H
 #define BORO_HOME_H
 
 #include "sys.h"
 
-enum { HOME_STAY, HOME_OPEN_MUSIC, HOME_OPEN_SETTINGS, HOME_OPEN_STATS, HOME_OPEN_VIDEO };
+enum { HOME_STAY, HOME_OPEN_MUSIC, HOME_OPEN_SETTINGS, HOME_OPEN_STATS, HOME_OPEN_VIDEO, HOME_OPEN_GAMES };
 
 void home_init(void);
 int home_update(const Input *in, float dt);

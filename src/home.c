@@ -11,9 +11,10 @@
 #include "settings.h"
 #include "stats.h"
 #include "ui.h"
+#include "glib.h"
 #include "vlib.h"
 
-enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
+enum { SEL_MUSIC, SEL_VIDEO, SEL_GAMES, SEL_STATS, SEL_COUNT };
 
 #define ACCENT HEX(0x6C8CFF, 255)
 #define TEXT HEX(0xF2F2F5, 255)
@@ -25,17 +26,17 @@ enum { SEL_MUSIC, SEL_VIDEO, SEL_STATS, SEL_COUNT };
 #define PAD 16
 #define TILE_Y 40
 #define TILE_H 128
-#define TILE_W 218
+#define TILE_W 141
 #define STATS_Y 178
 #define STATS_H 50
 
 static Font *f_logo, *f_title, *f_big, *f_mid, *f_small, *f_small_b, *f_tiny;
 static Texture *t_glow, *t_fill16, *t_ring16, *t_shadow16, *t_fill14, *t_ring14, *t_shadow14;
-static Texture *t_music, *t_video, *t_thumb, *t_art, *t_fill8, *t_ring8;
+static Texture *t_music, *t_video, *t_games, *t_thumb, *t_art, *t_fill8, *t_ring8;
 static Font *f_quit, *f_note, *f_button;
 
 static int sel = SEL_MUSIC, last_tile = SEL_MUSIC;
-static float sel_k[SEL_COUNT] = { 1, 0, 0 };
+static float sel_k[SEL_COUNT] = { 1, 0, 0, 0 };
 static float t_now;
 
 // "Quit Boro?" prompt: Stay is picked first, so a double tap of ○ never quits.
@@ -69,6 +70,19 @@ static Texture *icon_video(void)
     return t;
 }
 
+static Texture *icon_games(void)
+{
+    Texture *t = tex_create(32, 32);
+    const float s = 32.0f / 24.0f, w = 1.8f * s;
+    tex_stroke_round_rect(t, 2 * s, 7 * s, 20 * s, 11 * s, 5 * s, w);
+    tex_stroke_line(t, 5 * s, 12.5f * s, 10 * s, 12.5f * s, w);
+    tex_stroke_line(t, 7.5f * s, 10 * s, 7.5f * s, 15 * s, w);
+    tex_fill_circle(t, 15.5f * s, 11 * s, 1.3f * s);
+    tex_fill_circle(t, 18 * s, 14 * s, 1.3f * s);
+    tex_upload(t);
+    return t;
+}
+
 void home_init(void)
 {
     f_logo = ui_font(FAMILY_SORA, 800, 16);
@@ -88,6 +102,7 @@ void home_init(void)
     t_shadow14 = tex_round_shadow(14, 18, 1);
     t_music = icon_music();
     t_video = icon_video();
+    t_games = icon_games();
     t_thumb = tex_round_gradient(58, 33, 6, HEX(0x2B3A67, 255), HEX(0xC46A8A, 255));
     t_art = tex_round_gradient(16, 16, 3, HEX(0x234E70, 255), HEX(0x57A0D3, 255));
     t_fill8 = tex_round_fill(8);
@@ -117,15 +132,15 @@ int home_update(const Input *in, float dt)
         quit_update(p);
         return HOME_STAY;
     }
-    if (p & PSP_CTRL_LEFT && sel == SEL_VIDEO) sel = SEL_MUSIC;
-    if (p & PSP_CTRL_RIGHT && sel == SEL_MUSIC) sel = SEL_VIDEO;
+    if (p & PSP_CTRL_LEFT && sel > SEL_MUSIC && sel != SEL_STATS) sel--;
+    if (p & PSP_CTRL_RIGHT && sel < SEL_GAMES) sel++;
     if (p & PSP_CTRL_DOWN && sel != SEL_STATS) { last_tile = sel; sel = SEL_STATS; }
     if (p & PSP_CTRL_UP && sel == SEL_STATS) sel = last_tile;
 
     if (p & PSP_CTRL_CROSS) {
         if (sel == SEL_MUSIC) return HOME_OPEN_MUSIC;
         if (sel == SEL_STATS) return library_state() == LIB_READY ? HOME_OPEN_STATS : HOME_STAY;
-        return HOME_OPEN_VIDEO;
+        return sel == SEL_GAMES ? HOME_OPEN_GAMES : HOME_OPEN_VIDEO;
     }
     if (p & PSP_CTRL_START) return HOME_OPEN_SETTINGS;
     if (p & PSP_CTRL_SQUARE && player_song() >= 0) player_toggle_pause();
@@ -203,29 +218,41 @@ static void draw_status(void)
 
 static void draw_tiles(void)
 {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         float x = PAD + i * (TILE_W + 12), y = TILE_Y, k = sel_k[i];
         panel(x, y, TILE_W, TILE_H, 1, k);
-        gfx_tex(i == 0 ? t_music : t_video, x + 14, y + 12, 32, 32, color_lerp(ICON_IDLE, ACCENT, k));
+        Texture *icon = i == 0 ? t_music : i == 1 ? t_video : t_games;
+        gfx_tex(icon, x + 14, y + 12, 32, 32, color_lerp(ICON_IDLE, ACCENT, k));
         if (i == 0) {
             for (int b = 0; b < 5; b++) {
                 static const float dur[5] = { 0.5f, 0.7f, 0.45f, 0.8f, 0.6f };
                 float h = 16 * pingpong_eq(t_now, dur[b], b * 0.13f);
                 gfx_rect(x + TILE_W - 14 - 23 + b * 5, y + 12 + 16 - h, 3, h, ACCENT);
             }
-        } else {
+        } else if (i == 1) {
             gfx_tex(t_thumb, x + TILE_W - 14 - 58, y + 12, 58, 33, 0xFFFFFFFF);
+        } else {
+            const Texture *g = glib_icon(glib_last_game());
+            gfx_filter(1);
+            gfx_tex(g ? g : t_thumb, x + TILE_W - 14 - 58, y + 12, 58, 32, 0xFFFFFFFF);
         }
-        font_draw(f_title, x + 14, y + TILE_H - 34, i == 0 ? "Music" : "Video", TEXT, 0);
+        static const char *const names[3] = { "Music", "Video", "Games" };
+        font_draw(f_title, x + 14, y + TILE_H - 34, names[i], TEXT, 0);
         char sub[128];
         if (i == 0 && library_state() != LIB_READY)
             snprintf(sub, sizeof(sub), "Scanning\xE2\x80\xA6 %d songs", library_scan_count());
         else if (i == 0)
             snprintf(sub, sizeof(sub), "%s theme \xC2\xB7 Playlists \xC2\xB7 Radio", theme_names[settings.theme]);
-        else if (vlib_continue() >= 0)
+        else if (i == 1 && vlib_continue() >= 0)
             snprintf(sub, sizeof(sub), "Continue: %s", videos[vlib_continue()].title);
-        else
+        else if (i == 1)
             snprintf(sub, sizeof(sub), video_count == 1 ? "%d video" : "%d videos", video_count);
+        else if (glib_last_title())
+            snprintf(sub, sizeof(sub), "Last: %s", glib_last_title());
+        else if (glib_ready())
+            snprintf(sub, sizeof(sub), game_count == 1 ? "%d game" : "%d games", game_count);
+        else
+            snprintf(sub, sizeof(sub), "ISO, CSO and EBOOT games");
         font_draw_fit(f_tiny, x + 14, y + TILE_H - 16, sub, SUBTLE, TILE_W - 28);
         if (i == 1 && vlib_continue() >= 0) {
             const Video *v = &videos[vlib_continue()];

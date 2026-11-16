@@ -8,6 +8,8 @@
 #include "art.h"
 #include "flac.h"
 #include "gfx.h"
+#include "games.h"
+#include "glib.h"
 #include "home.h"
 #include "library.h"
 #include "music.h"
@@ -32,7 +34,7 @@ PSP_MODULE_INFO("Boro", PSP_MODULE_USER, 0, 1);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO, MODE_SPLASH, MODE_NO_MUSIC };
+enum { MODE_HOME, MODE_MUSIC, MODE_SETTINGS, MODE_STATS, MODE_VIDEO, MODE_SPLASH, MODE_NO_MUSIC, MODE_GAMES };
 
 
 // The music player in the theme picked in Settings.
@@ -95,6 +97,7 @@ int main(int argc, char *argv[])
     library_start(data_dir, music_dir);
     vlib_init(data_dir, video_dir, picture_dir);
     plib_init(data_dir, picture_dir);
+    glib_init(data_dir, app_dir);
     home_init();
 
     u64 tick_res = sceRtcGetTickResolution(), last;
@@ -122,8 +125,10 @@ int main(int argc, char *argv[])
             stations_load();
             playlists_load();
             stats_load(data_dir);
+            glib_scan(); // games too, once the music scan is done
         }
         stats_frame(dt);
+        glib_frame();
         settings_frame(dt);
         // While music plays the PSP mustn't go to sleep, and with "Keep
         // screen on" the backlight stays up too.
@@ -189,6 +194,9 @@ int main(int argc, char *argv[])
             } else if (r == HOME_OPEN_VIDEO) {
                 mode = MODE_VIDEO;
                 video_enter();
+            } else if (r == HOME_OPEN_GAMES) {
+                mode = MODE_GAMES;
+                games_enter();
             } else if (r == HOME_OPEN_STATS) {
                 mode = MODE_STATS;
                 stats_enter();
@@ -202,6 +210,9 @@ int main(int argc, char *argv[])
         } else if (mode == MODE_VIDEO) {
             if (video_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_VIDEO) video_draw(dt);
+        } else if (mode == MODE_GAMES) {
+            if (games_update(&in, dt)) mode = MODE_HOME;
+            if (mode == MODE_GAMES) games_draw(dt);
         } else if (mode == MODE_STATS) {
             if (stats_update(&in, dt)) mode = MODE_HOME;
             if (mode == MODE_STATS) stats_draw(dt);

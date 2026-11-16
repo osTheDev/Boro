@@ -1,0 +1,47 @@
+// Game library: PSP games on the memory stick (ISO and CSO files under ISO,
+// EBOOT.PBP games under PSP/GAME) with titles and icons read from the games
+// themselves, plus the playtime the Boro Playtime plugin logs to
+// data/playtime.txt. Games are found and their icons decoded on a background
+// thread; nothing is ever moved or renamed.
+#ifndef BORO_GLIB_H
+#define BORO_GLIB_H
+
+#include <psptypes.h>
+#include "gfx.h"
+
+enum { GTYPE_PSP, GTYPE_PS1, GTYPE_HOMEBREW };
+
+#define GICON_W 108
+#define GICON_H 60
+
+typedef struct {
+    char path[256];
+    char title[96];
+    char disc_id[16];
+    int type;
+    u32 seconds;        // played in total
+    u32 sessions;
+    char last[20];      // "YYYY-MM-DD HH:MM:SS" the last session started, or ""
+    volatile int icon;  // 0 not read yet, 1 decoded, 2 uploaded, -1 none
+    u8 *icon_px;        // GICON_W x GICON_H RGBA until uploaded
+    Texture *tex;
+} Game;
+
+extern Game *games;
+extern int game_count;
+
+// Folds the plugin's last session into the log and reads the totals.
+void glib_init(const char *data_dir, const char *app_dir);
+void glib_scan(void);   // starts looking for games (once)
+int glib_ready(void);   // the list is in (icons may still be coming)
+void glib_frame(void);  // main thread: takes in the scan and uploads icons
+const Texture *glib_icon(int index);
+
+// The game played last, from the log even before the scan: title or NULL.
+const char *glib_last_title(void);
+int glib_last_game(void); // index into games, or -1
+
+void glib_format_time(char *out, int size, u32 seconds); // "42h 10m", "52m"
+void glib_format_last(char *out, int size, const char *last); // "Today", "3 days ago", "Oct 2"
+
+#endif
