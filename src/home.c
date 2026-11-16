@@ -524,6 +524,8 @@ static void music_front(float a)
     font_draw(f_mid, x, 160, "AC", color_alpha(TEXT, a), 0);
 }
 
+static const Texture *video_poster(void);
+
 static void draw_back(int tile, float a)
 {
     u32 tint = color_alpha(0xFFFFFFFF, a);
@@ -536,6 +538,11 @@ static void draw_back(int tile, float a)
     // Video and Books: the picture is small, so it only tints the backdrop
     // (dimmed, so the blur reads as color) and a sharp card sits on top.
     u32 soft = color_alpha(HEX(0x707070, 255), a);
+    if (tile == SEL_VIDEO && (t = video_poster())) {
+        float sw = t->w * 0.8f, sh = sw * SCREEN_H / SCREEN_W;
+        gfx_tex_part(t, (t->w - sw) / 2, (t->h - sh) / 2, sw, sh, 0, 0, SCREEN_W, SCREEN_H, soft);
+        return;
+    }
     if (tile == SEL_VIDEO && vlib_continue() >= 0 && (t = vlib_thumb(vlib_continue()))) {
         gfx_tex(t, 0, 0, SCREEN_W, SCREEN_H, soft);
         return;
@@ -558,6 +565,23 @@ static void draw_back(int tile, float a)
     gfx_gradient(0, 0, SCREEN_W, SCREEN_H, c1, c0, c1, c1);
 }
 
+// Full-size poster for the paused video (portrait art only; a 16:9 picture
+// beside the video is already the thumbnail). Path looked up once per video.
+static const Texture *video_poster(void)
+{
+    static int for_index = -2;
+    static char path[300];
+    int c = vlib_continue();
+    if (c < 0) return NULL;
+    if (c != for_index) {
+        for_index = c;
+        if (!vlib_poster_file(c, path, sizeof(path))) path[0] = 0;
+    }
+    if (!path[0]) return NULL;
+    const Texture *t = art_get_file(path, ART_COVER_L);
+    return t && t->h > t->w ? t : NULL;
+}
+
 // Sharp card for Video (the paused episode's frame) and Books (the whole
 // cover), drawn over the shading between the clock row and the tiles.
 static int card_shown(int tile)
@@ -572,12 +596,14 @@ static void card_front(int tile, float a)
     u32 tint = color_alpha(0xFFFFFFFF, a);
     const Texture *t = NULL;
     float x, y, w, h;
-    if (tile == SEL_VIDEO) {
+    if (tile == SEL_VIDEO && !(t = video_poster())) {
         if (vlib_continue() < 0 || !(t = vlib_thumb(vlib_continue()))) return;
         w = 176, h = 99, x = SCREEN_W - 16 - w, y = 46;
-    } else if (tile == SEL_BOOKS) {
-        if (blib_current() < 0 || !books[blib_current()].cover[0]) return;
-        if (!(t = art_get_file(books[blib_current()].cover, ART_COVER_L))) return;
+    } else if (tile == SEL_BOOKS || tile == SEL_VIDEO) {
+        if (tile == SEL_BOOKS) {
+            if (blib_current() < 0 || !books[blib_current()].cover[0]) return;
+            if (!(t = art_get_file(books[blib_current()].cover, ART_COVER_L))) return;
+        }
         h = 112, w = h * t->w / (float)t->h;
         if (w > 150) w = 150, h = w * t->h / (float)t->w;
         x = SCREEN_W - 40 - w, y = 40 + (112 - h) / 2;
@@ -595,7 +621,7 @@ static void stream_hero(void)
     hero_of(tile, &h);
     float y = 60;
     font_draw(f_tiny, PAD, y, h.label, ACCENT, 1);
-    float max_w = tile == SEL_MUSIC ? 236 : tile == SEL_VIDEO && card_shown(tile) ? 254 : 300; // art on the right
+    float max_w = tile == SEL_MUSIC ? 236 : tile == SEL_VIDEO && card_shown(tile) && !video_poster() ? 254 : 300; // art on the right
     font_draw_fit(f_title, PAD, y + 26, h.title, TEXT, max_w);
     font_draw_fit(f_small, PAD, y + 44, h.sub, MUTED, max_w);
     if (h.progress >= 0) {

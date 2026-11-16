@@ -69,5 +69,8 @@ u32 vlib_last_used(int show); // latest watched or added time of its episodes
 #define POSTER_H 96
 const Texture *vlib_show_poster(int show);
 const Texture *vlib_video_poster(int index);
+// Path of the full-size picture behind a video's poster (show cover for an
+// episode, else <video name>.jpg/png). Returns 0 when there is none.
+int vlib_poster_file(int index, char *out, int size);
 
 #endif
